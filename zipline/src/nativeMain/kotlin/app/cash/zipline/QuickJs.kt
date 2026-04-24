@@ -272,7 +272,7 @@ actual class QuickJs private constructor(
       fileName.utf8,
       JS_EVAL_FLAG_COMPILE_ONLY or JS_EVAL_FLAG_STRICT,
     )
-    if (JS_IsException(compiled) != 0) {
+    if (JS_IsException(compiled)) {
       throwJsException()
     }
     val result = memScoped {
@@ -310,14 +310,14 @@ actual class QuickJs private constructor(
       bytecode.size.convert(),
       JS_READ_OBJ_BYTECODE or JS_READ_OBJ_REFERENCE or JS_EVAL_FLAG_STRICT,
     )
-    if (JS_IsException(obj) != 0) {
+    if (JS_IsException(obj)) {
       throwJsException()
     }
     if (JS_ResolveModule(context, obj) != 0) {
       throw QuickJsException("Failed to resolve JS module")
     }
     val value = JS_EvalFunction(context, obj)
-    if (JS_IsException(value) != 0) {
+    if (JS_IsException(value)) {
       JS_FreeValue(context, value)
       throwJsException()
     }
@@ -338,7 +338,7 @@ actual class QuickJs private constructor(
 
       val outboundCallChannelClassId = memScoped {
         val id = alloc<JSClassIDVar>()
-        JS_NewClassID(id.ptr)
+        JS_NewClassID(runtime, id.ptr)
 
         val classDef = alloc<JSClassDef>()
         classDef.class_name = "OutboundCallChannel".cstr.ptr
@@ -347,8 +347,8 @@ actual class QuickJs private constructor(
         id.value.toInt() // Why doesn't JS_NewObjectClass accept a UInt / JSClassID?
       }
 
-      val jsOutboundCallChannel = JS_NewObjectClass(context, outboundCallChannelClassId)
-      if (JS_IsException(jsOutboundCallChannel) != 0 ||
+      val jsOutboundCallChannel = JS_NewObjectClass(context, outboundCallChannelClassId.toUInt())
+      if (JS_IsException(jsOutboundCallChannel) ||
           JS_SetProperty(context, globalThis, propertyName, jsOutboundCallChannel) <= 0
       ) {
         throwJsException()
@@ -424,7 +424,7 @@ actual class QuickJs private constructor(
 
     val message = JS_ToCString(
       context,
-      messageValue.takeUnless { JS_IsUndefined(messageValue) != 0 } ?: exceptionValue,
+      messageValue.takeUnless { JS_IsUndefined(messageValue) } ?: exceptionValue,
     )?.toKStringFromUtf8() ?: ""
     JS_FreeValue(context, messageValue)
 
@@ -455,7 +455,7 @@ actual class QuickJs private constructor(
       JS_TAG_NULL, JS_TAG_UNDEFINED -> null
 
       JS_TAG_OBJECT -> {
-        if (JS_IsArray(context, this) != 0) {
+        if (JS_IsArray(this)) {
           val lengthProperty = JS_GetPropertyStr(context, this, "length")
           val length = JsValueGetInt(lengthProperty)
           JS_FreeValue(context, lengthProperty)

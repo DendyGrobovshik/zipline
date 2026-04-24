@@ -306,7 +306,7 @@ void Context::setOutboundCallChannel(JNIEnv* env, jstring name, jobject callChan
   const auto objName = JS_NewAtom(jsContext, nameStr);
   if (!JS_HasProperty(jsContext, global, objName)) {
     if (outboundCallChannelClassId == 0) {
-      JS_NewClassID(&outboundCallChannelClassId);
+      JS_NewClassID(jsRuntime, &outboundCallChannelClassId);
       JSClassDef classDef;
       memset(&classDef, 0, sizeof(JSClassDef));
       classDef.class_name = "OutboundCallChannel";
@@ -379,7 +379,7 @@ Context::toJavaObject(JNIEnv* env, const JSValueConst& value, bool throwOnUnsupp
       break;
 
     case JS_TAG_OBJECT:
-      if (JS_IsArray(jsContext, value)) {
+      if (JS_IsArray(value)) {
         auto arrayLengthProperty = JS_GetPropertyStr(jsContext, value, "length");
         const auto arrayLength = JS_VALUE_GET_INT(arrayLengthProperty);
         JS_FreeValue(jsContext, arrayLengthProperty);

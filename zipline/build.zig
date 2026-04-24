@@ -47,7 +47,7 @@ fn setupTarget(b: *std.Build, step: *std.Build.Step, tag: std.Target.Os.Tag, arc
       "native/common/context-no-eval.c",
       "native/common/finalization-registry.c",
       "native/common/global-gc.c",
-      "native/quickjs/cutils.c",
+      // "native/quickjs/cutils.c",
       "native/quickjs/dtoa.c",
       "native/quickjs/libregexp.c",
       "native/quickjs/libunicode.c",

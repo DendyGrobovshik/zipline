@@ -186,7 +186,7 @@ int installFinalizationRegistry(JSContext *jsContext, JSContext *jsContextForCom
   JSRuntime* jsRuntime = JS_GetRuntime(jsContext);
 
   if (finalizerClassId == 0) {
-    JS_NewClassID(&finalizerClassId);
+    JS_NewClassID(jsRuntime, &finalizerClassId);
   }
 
   // Define the runtime API in regular JavaScript.

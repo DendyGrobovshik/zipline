@@ -31,7 +31,7 @@ JSContext *JS_NewContextNoEval(JSRuntime *jsRuntime) {
   JS_AddIntrinsicBaseObjects(jsContext);
   JS_AddIntrinsicDate(jsContext);
   // Eval intrinsic NOT installed here.
-  JS_AddIntrinsicStringNormalize(jsContext);
+//  JS_AddIntrinsicStringNormalize(jsContext);
   JS_AddIntrinsicRegExp(jsContext);
   JS_AddIntrinsicJSON(jsContext);
   JS_AddIntrinsicProxy(jsContext);
