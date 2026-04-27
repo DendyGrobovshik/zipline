@@ -33,6 +33,7 @@ fn setupTarget(b: *std.Build, step: *std.Build.Step, tag: std.Target.Os.Tag, arc
   lib.root_module.addCMacro("CONFIG_VERSION", quoted_version);
 
   lib.addIncludePath(b.path("native/include/share"));
+  lib.addIncludePath(b.path("native/include/mimalloc"));
   lib.addIncludePath(
     switch (tag) {
       .windows => b.path("native/include/windows"),
@@ -40,7 +41,12 @@ fn setupTarget(b: *std.Build, step: *std.Build.Step, tag: std.Target.Os.Tag, arc
     }
   );
 
+  // lib.linkSystemLibrary("native/mimalloc");
+
+  lib.addObjectFile(b.path("native/mimalloc/libmimalloc.a"));
+
   lib.linkLibC();
+
   // TODO Tree-walk these two dirs for all C files.
   lib.addCSourceFiles(.{
     .files = &.{

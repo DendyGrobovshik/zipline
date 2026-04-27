@@ -15,7 +15,7 @@
  */
 package app.cash.zipline.bytecode
 
-internal const val BC_VERSION = 1
+internal const val BC_VERSION = 5
 internal const val BC_TAG_NULL = 1
 internal const val BC_TAG_UNDEFINED = 2
 internal const val BC_TAG_BOOL_FALSE = 3

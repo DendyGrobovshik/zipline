@@ -30,6 +30,7 @@
 #include <inttypes.h>
 #include <string.h>
 #include <assert.h>
+#include <mimalloc.h>
 #if !defined(_MSC_VER)
 #include <sys/time.h>
 #if defined(_WIN32)
@@ -2026,37 +2027,39 @@ int JS_AddRuntimeFinalizer(JSRuntime *rt, JSRuntimeFinalizer *finalizer,
     return 0;
 }
 
-static void *js_def_calloc(void *opaque, size_t count, size_t size)
+static void *js_mi_calloc(void *opaque, size_t count, size_t size)
 {
-    return calloc(count, size);
+    return mi_calloc(count, size);
 }
 
-static void *js_def_malloc(void *opaque, size_t size)
+static void *js_mi_malloc(void *opaque, size_t size)
 {
-    return malloc(size);
+    return mi_malloc(size);
 }
 
-static void js_def_free(void *opaque, void *ptr)
+static void js_mi_free(void *opaque, void *ptr)
 {
-    free(ptr);
+    if (!ptr)
+        return;
+    mi_free(ptr);
 }
 
-static void *js_def_realloc(void *opaque, void *ptr, size_t size)
+static void *js_mi_realloc(void *opaque, void *ptr, size_t size)
 {
-    return realloc(ptr, size);
+    return mi_realloc(ptr, size);
 }
 
-static const JSMallocFunctions def_malloc_funcs = {
-    js_def_calloc,
-    js_def_malloc,
-    js_def_free,
-    js_def_realloc,
-    js__malloc_usable_size
+static const JSMallocFunctions mi_mf = {
+    js_mi_calloc,
+    js_mi_malloc,
+    js_mi_free,
+    js_mi_realloc,
+    mi_malloc_usable_size
 };
 
 JSRuntime *JS_NewRuntime(void)
 {
-    return JS_NewRuntime2(&def_malloc_funcs, NULL);
+    return JS_NewRuntime2(&mi_mf, NULL);
 }
 
 void JS_SetMemoryLimit(JSRuntime *rt, size_t limit)
@@ -3408,9 +3411,9 @@ JSValue JS_NewSymbol(JSContext *ctx, const char *description, bool is_global)
             /* Local symbol without description: Symbol() */
             return JS_NewSymbolInternal(ctx, NULL, JS_ATOM_TYPE_SYMBOL);
         }
-        /* Global symbol without description: Symbol.for() 
+        /* Global symbol without description: Symbol.for()
            Per ES spec, ToString(undefined) becomes "undefined" */
-        description = "undefined";    
+        description = "undefined";
     }
     JSAtom atom = JS_NewAtom(ctx, description);
     if (atom == JS_ATOM_NULL)
