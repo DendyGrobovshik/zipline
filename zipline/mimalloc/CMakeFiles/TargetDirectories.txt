@@ -1,0 +1,15 @@
+/Users/adev/StudioProjects/mimalloc/CMakeFiles/mimalloc.dir
+/Users/adev/StudioProjects/mimalloc/CMakeFiles/mimalloc-static.dir
+/Users/adev/StudioProjects/mimalloc/CMakeFiles/mimalloc-obj.dir
+/Users/adev/StudioProjects/mimalloc/CMakeFiles/mimalloc-obj-target.dir
+/Users/adev/StudioProjects/mimalloc/CMakeFiles/mimalloc-test-api.dir
+/Users/adev/StudioProjects/mimalloc/CMakeFiles/mimalloc-test-api-fill.dir
+/Users/adev/StudioProjects/mimalloc/CMakeFiles/mimalloc-test-stress.dir
+/Users/adev/StudioProjects/mimalloc/CMakeFiles/mimalloc-test-stress-dynamic.dir
+/Users/adev/StudioProjects/mimalloc/CMakeFiles/test.dir
+/Users/adev/StudioProjects/mimalloc/CMakeFiles/edit_cache.dir
+/Users/adev/StudioProjects/mimalloc/CMakeFiles/rebuild_cache.dir
+/Users/adev/StudioProjects/mimalloc/CMakeFiles/list_install_components.dir
+/Users/adev/StudioProjects/mimalloc/CMakeFiles/install.dir
+/Users/adev/StudioProjects/mimalloc/CMakeFiles/install/local.dir
+/Users/adev/StudioProjects/mimalloc/CMakeFiles/install/strip.dir
