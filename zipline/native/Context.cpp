@@ -14,6 +14,10 @@
  * limitations under the License.
  */
 #include "Context.h"
+#include "bridge_dispatch.h"
+#ifdef __ANDROID__
+#include <android/log.h>
+#endif
 #include <cstring>
 #include <memory>
 #include <assert.h>
@@ -25,6 +29,65 @@
 #include "common/global-gc.h"
 #include "common/intset-builtins.h"
 #include "quickjs/quickjs.h"
+
+#ifdef __ANDROID__
+#include <vector>
+#include <string>
+#include <utility>
+
+static std::vector<std::pair<std::string, jobject(*)(JNIEnv*,JSContext*,const JSValue*)>> bridgeTable;
+static std::vector<void(*)(JNIEnv*)> bridgeInits;
+
+extern "C" __attribute__((used, visibility("default"))) void addBridgeEntry(const char* fq, jobject(*fn)(JNIEnv*,JSContext*,const JSValue*)) {
+    bridgeTable.push_back({fq, fn});
+}
+
+extern "C" __attribute__((used, visibility("default"))) void addBridgeInit(void(*fn)(JNIEnv*)) {
+    bridgeInits.push_back(fn);
+}
+
+extern "C" __attribute__((used, visibility("default"))) void init_all(JNIEnv* env) {
+    for (auto& fn : bridgeInits) {
+        fn(env);
+    }
+}
+
+// Shared __bridgeRegister JS function — looks up FQNs in the dynamic bridgeTable.
+static JSValue bridge_register_js(JSContext *ctx, JSValueConst this_val,
+    int argc, JSValueConst *argv) {
+    if (argc < 2) return JS_UNDEFINED;
+    const char *fq = JS_ToCString(ctx, argv[0]);
+    if (!fq) return JS_UNDEFINED;
+    JSValue ctor = argv[1];
+    if (JS_IsUndefined(ctor)) { JS_FreeCString(ctx, fq); return JS_UNDEFINED; }
+    for (auto& entry : bridgeTable) {
+        if (strcmp(entry.first.c_str(), fq) == 0) {
+            JniBridgeDispatch *disp = (JniBridgeDispatch *)js_malloc(ctx, sizeof(JniBridgeDispatch));
+            disp->toJavaObject = entry.second;
+            JSValue proto = JS_GetPropertyStr(ctx, ctor, "prototype");
+            JS_SetPropertyStr(ctx, proto, "bridge_dispatch",
+                JS_NewFloat64(ctx, (double)(intptr_t)disp));
+            JS_FreeValue(ctx, proto);
+            JS_FreeCString(ctx, fq);
+            return JS_UNDEFINED;
+        }
+    }
+#if defined(__ANDROID__)
+    __android_log_print(ANDROID_LOG_ERROR, "BRIDGE",
+        "bridge_register_js: FQN '%s' not found in bridge_table", fq);
+#endif
+    JS_ThrowTypeError(ctx, "bridge_register_js: FQN '%s' not found in bridge_table", fq);
+    JS_FreeCString(ctx, fq);
+    return JS_EXCEPTION;
+}
+
+extern "C" __attribute__((used, visibility("default"))) void register_all(JSContext* ctx) {
+    JSValue global = JS_GetGlobalObject(ctx);
+    JS_SetPropertyStr(ctx, global, "__bridgeRegister",
+        JS_NewCFunction(ctx, bridge_register_js, "__bridgeRegister", 2));
+    JS_FreeValue(ctx, global);
+}
+#endif
 
 /**
  * This signature satisfies the JSInterruptHandler typedef. It is always installed but only does
@@ -555,6 +618,9 @@ void Context::cacheRdmaBridgeMethods(JNIEnv* env) {
   this->rdmaBridgeCreateModifierElement = env->GetStaticMethodID(
       cls, "createModifierElement",
       "(ILkotlinx/serialization/json/JsonElement;)Lapp/cash/redwood/protocol/ModifierElement;");
+  this->rdmaBridgeCreateBridgeChange = env->GetStaticMethodID(
+      cls, "createBridgeChange",
+      "(ILjava/lang/Object;)Lapp/cash/redwood/protocol/BridgeChange;");
 
   // JsonElement factories
   this->rdmaBridgeJsonPrimitiveString = env->GetStaticMethodID(
@@ -762,6 +828,43 @@ static jobject rdmaChangeToJava(JNIEnv* env, const RdmaChange& ch, Context* cont
           ch.id, ch.field1, ch.field2, ch.detach ? JNI_TRUE : JNI_FALSE);
     case RdmaChangeType::Move:
       return env->CallStaticObjectMethod(context->rdmaBridgeClass, context->rdmaBridgeCreateMove, ch.id, ch.field1, ch.field2, ch.field3, ch.count);
+    case RdmaChangeType::BridgeChange: {
+      JSValue dispVal = JS_GetPropertyStr(context->jsContext, ch.jsValue, "bridge_dispatch");
+      if (!JS_IsUndefined(dispVal)) {
+        JniBridgeDispatch* disp = (JniBridgeDispatch*)(intptr_t)JS_VALUE_GET_FLOAT64(dispVal);
+        jobject uiChange = disp->toJavaObject(env, context->jsContext, &ch.jsValue);
+        JS_FreeValue(context->jsContext, dispVal);
+        if (!uiChange) {
+          JS_FreeValue(context->jsContext, ch.jsValue);
+          return nullptr;
+        }
+        jobject result = env->CallStaticObjectMethod(context->rdmaBridgeClass, context->rdmaBridgeCreateBridgeChange,
+            ch.id, uiChange);
+        env->DeleteLocalRef(uiChange);
+        JS_FreeValue(context->jsContext, ch.jsValue);
+        return result;
+      }
+#if defined(__ANDROID__) && false // TODO(gogabr): need to find out why linking fails
+      {
+        const char *dbgName = "(unknown)";
+        JSValue dbgCtor = JS_GetPropertyStr(context->jsContext, ch.jsValue, "constructor");
+        if (!JS_IsUndefined(dbgCtor) && !JS_IsNull(dbgCtor)) {
+          JSValue dbgCtorName = JS_GetPropertyStr(context->jsContext, dbgCtor, "name");
+          dbgName = JS_ToCString(context->jsContext, dbgCtorName);
+          JS_FreeValue(context->jsContext, dbgCtorName);
+        }
+        __android_log_assert("FATAL", "BRIDGE",
+            "bridge_dispatch NOT found for ctor='%s' — nothing useful can be done",
+            dbgName ? dbgName : "(null)");
+        if (dbgName && dbgName != "(unknown)") JS_FreeCString(context->jsContext, dbgName);
+        JS_FreeValue(context->jsContext, dbgCtor);
+      }
+      abort();
+#endif
+      JS_FreeValue(context->jsContext, dispVal);
+      JS_FreeValue(context->jsContext, ch.jsValue);
+      return nullptr;
+    }
   }
   return nullptr;
 }
@@ -808,6 +911,30 @@ static inline void flushIfBatchFull(Context* context) {
     auto env = context->getEnv();
     if (env) context->flushPendingBatch(env, BATCH_SIZE);
   }
+}
+
+static JSValue rdmaAppendBridgeChange(
+    JSContext* ctx, JSValueConst thisVal,
+    int argc, JSValueConst* argv
+) {
+  Context* context = reinterpret_cast<Context*>(JS_GetRuntimeOpaque(JS_GetRuntime(ctx)));
+  if (!context) return JS_UNDEFINED;
+
+  RdmaChange ch;
+  ch.type = RdmaChangeType::BridgeChange;
+  ch.id = JS_VALUE_GET_INT(argv[0]);
+  ch.jsValue = JS_DupValue(ctx, argv[1]); // keep JS object alive until flush
+#ifdef __ANDROID__
+  //__android_log_print(ANDROID_LOG_INFO, "BRIDGE", "rdmaAppendBridgeChange id=%d", ch.id);
+#endif
+  ch.field1 = 0;
+  ch.field2 = 0;
+  ch.field3 = 0;
+  ch.count = 0;
+  ch.detach = false;
+  context->pendingChanges.push_back(ch);
+  flushIfBatchFull(context);
+  return JS_UNDEFINED;
 }
 
 static JSValue rdmaAppendCreate(
@@ -961,6 +1088,8 @@ void Context::initRdmaChangesChannel(JNIEnv* env) {
     return;
   }
 
+  JS_SetPropertyStr(jsContext, rdmaObj, "appendBridgeChange",
+      JS_NewCFunction(jsContext, rdmaAppendBridgeChange, "appendBridgeChange", 2));
   JS_SetPropertyStr(jsContext, rdmaObj, "appendCreate",
       JS_NewCFunction(jsContext, rdmaAppendCreate, "appendCreate", 2));
   JS_SetPropertyStr(jsContext, rdmaObj, "appendPropertyChange",

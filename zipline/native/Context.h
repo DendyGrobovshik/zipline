@@ -33,6 +33,7 @@ enum class RdmaChangeType {
   Add,
   Remove,
   Move,
+  BridgeChange,
 };
 
 constexpr int BATCH_SIZE = 2048;
@@ -113,6 +114,7 @@ public:
   jmethodID rdmaBridgeCreatePropertyChange;
   jmethodID rdmaBridgeCreateModifierChange;
   jmethodID rdmaBridgeCreateModifierElement;
+  jmethodID rdmaBridgeCreateBridgeChange;
   jmethodID rdmaBridgeJsonPrimitiveString;
   jmethodID rdmaBridgeJsonPrimitiveInt;
   jmethodID rdmaBridgeJsonPrimitiveLong;

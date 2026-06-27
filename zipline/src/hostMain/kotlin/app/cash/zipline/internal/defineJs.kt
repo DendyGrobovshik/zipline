@@ -21,7 +21,7 @@ internal const val CURRENT_MODULE_ID = "app_cash_zipline_currentModuleId"
  * Implements an AMD module loader for Kotlin/JS AMD modules running on QuickJS.
  * https://github.com/amdjs/amdjs-api/blob/master/AMD.md
  */
-internal const val DEFINE_JS =
+internal val DEFINE_JS =
   """
   (function initJsModuleApi() {
     // Maps module IDs (like './kotlin-kotlin-stdlib-js-ir' or 'export') to their exports.
@@ -62,6 +62,14 @@ internal const val DEFINE_JS =
       var result = factory(...args);
 
       idToExports[id] = result || exports;
+
+      // Trigger plugin-generated bridge registration.
+      var _exp = result || exports;
+      var jsExportAllFn = _exp[String.fromCharCode(36) + 'jsExportAll' + String.fromCharCode(36)];
+      if (typeof jsExportAllFn === 'function') {
+        try { jsExportAllFn(_exp); } catch(e) {}
+      }
+
     };
 
     // By convention, we set 'define.amd' to an object to declare we confirm to the AMD spec.

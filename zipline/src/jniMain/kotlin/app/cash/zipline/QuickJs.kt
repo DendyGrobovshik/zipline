@@ -182,6 +182,20 @@ actual class QuickJs private constructor(
   private external fun setMaxStackSize(context: Long, stackSize: Long)
   @JvmName("initRdmaChangesChannel")
   private external fun initRdmaChangesChannel(context: Long)
+
+  internal actual fun bridgeInitAll() {
+    try {
+      val jsCtx = getJsContext(context)
+      bridgeInitAllNative(jsCtx)
+      println("BRIDGE: bridgeInitAll succeeded")
+    } catch (e: UnsatisfiedLinkError) {
+      println("BRIDGE: bridgeInitAll failed — library not loaded: ${e.message}")
+    }
+  }
+
+  @JvmName("bridgeInitAllNative")
+  private external fun bridgeInitAllNative(jsContext: Long)
+  private external fun getJsContext(context: Long): Long
 }
 
 internal expect fun loadNativeLibrary()

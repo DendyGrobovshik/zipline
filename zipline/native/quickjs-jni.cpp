@@ -136,6 +136,12 @@ Java_app_cash_zipline_QuickJs_setMaxStackSize(JNIEnv* env, jobject type, jlong c
   context->setMaxStackSize(env, stackSize);
 }
 
+extern "C" JNIEXPORT jlong JNICALL
+Java_app_cash_zipline_QuickJs_getJsContext(JNIEnv*, jclass, jlong context_) {
+  Context* context = reinterpret_cast<Context*>(context_);
+  return reinterpret_cast<jlong>(context->jsContext);
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_app_cash_zipline_QuickJs_initRdmaChangesChannel(JNIEnv* env, jobject, jlong context_) {
   Context* context = reinterpret_cast<Context*>(context_);

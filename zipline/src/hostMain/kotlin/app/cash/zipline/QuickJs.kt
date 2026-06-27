@@ -107,4 +107,6 @@ expect class QuickJs : AutoCloseable {
   fun initRdmaChangesChannel()
 
   override fun close()
+
+  internal fun bridgeInitAll()
 }

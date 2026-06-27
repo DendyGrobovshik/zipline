@@ -179,10 +179,15 @@ cklib {
   config.kotlinVersion = libs.versions.kotlin.get()
   create("quickjs") {
     language = C
-    srcDirs = project.files(file("native/quickjs"), file("native/common"))
+    srcDirs = project.files(
+      file("native/quickjs"),
+      file("native/common"),
+      file("src/nativeMain/c"),
+    )
     compilerArgs.addAll(
       listOf(
         //"-DDUMP_LEAKS=1", // For local testing ONLY!
+        "-I${file("native").absolutePath}",
         "-DCONFIG_VERSION=\"${quickJsVersion()}\"",
         "-Wno-unknown-pragmas",
         "-ftls-model=initial-exec",

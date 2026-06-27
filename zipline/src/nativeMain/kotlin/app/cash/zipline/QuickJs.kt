@@ -100,11 +100,13 @@ import app.cash.zipline.quickjs.JsGetPropertyAt
 import app.cash.zipline.quickjs.JsGetPropertyName
 import app.cash.zipline.quickjs.JsFreePropertyEnum
 import app.cash.zipline.quickjs.JsNewCFunction
+import app.cash.zipline.quickjs.JsNewFloat64
 import app.cash.zipline.quickjs.JsNewTagInt
 import kotlin.experimental.ExperimentalNativeApi
 import kotlinx.cinterop.CArrayPointer
 import kotlinx.cinterop.COpaquePointer
 import kotlinx.cinterop.CPointer
+import kotlinx.cinterop.CPointed
 import kotlinx.cinterop.CValue
 import kotlinx.cinterop.CValuesRef
 import kotlinx.cinterop.ExperimentalForeignApi
@@ -113,9 +115,12 @@ import kotlinx.cinterop.StableRef
 import kotlinx.cinterop.UByteVar
 import kotlinx.cinterop.alloc
 import kotlinx.cinterop.asStableRef
+import kotlinx.cinterop.CFunction
 import kotlinx.cinterop.convert
+import kotlinx.cinterop.toCPointer
 import kotlinx.cinterop.cstr
 import kotlinx.cinterop.free
+import kotlinx.cinterop.invoke
 import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.nativeHeap
 import kotlinx.cinterop.ptr
@@ -134,6 +139,18 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import platform.posix.size_tVar
+
+val bridgeRetainRefs = mutableListOf<() -> Unit>()
+
+fun registerBridgeInitHook(hook: () -> Unit) {
+  bridgeRetainRefs.add(hook)
+}
+
+private val bridgeTable = mutableMapOf<String, CPointer<CFunction<(CPointer<JSContext>, CValue<JSValue>) -> COpaquePointer?>>>()
+
+fun registerBridge(fqn: String, fn: CPointer<CFunction<(CPointer<JSContext>, CValue<JSValue>) -> COpaquePointer?>>) {
+  bridgeTable[fqn] = fn
+}
 
 @EngineApi
 actual class QuickJs private constructor(
@@ -464,6 +481,10 @@ actual class QuickJs private constructor(
       JsNewCFunction(context, staticCFunction(::rdmaAppendMoveGlobal), "appendMove", 5),
     )
     JS_SetPropertyStr(
+      context, rdmaObj, "appendBridgeChange",
+      JsNewCFunction(context, staticCFunction(::rdmaAppendBridgeChangeGlobal), "appendBridgeChange", 2)
+    )
+    JS_SetPropertyStr(
       context, rdmaObj, "finishChanges",
       JsNewCFunction(context, staticCFunction(::rdmaFinishChangesGlobal), "finishChanges", 0),
     )
@@ -473,6 +494,18 @@ actual class QuickJs private constructor(
     )
 
     JS_SetPropertyStr(context, globalThis, "app_cash_redwood_rdmaSendChanges", rdmaObj)
+    JS_FreeValue(context, globalThis)
+  }
+
+  internal actual fun bridgeInitAll() {
+    checkNotClosed()
+
+    // Force initialization of all bridge modules
+    bridgeRetainRefs.forEach { it() }
+
+    val globalThis = JS_GetGlobalObject(context)
+    JS_SetPropertyStr(context, globalThis, "__bridgeRegister",
+      JsNewCFunction(context, staticCFunction(::bridgeRegisterGlobal), "__bridgeRegister", 2))
     JS_FreeValue(context, globalThis)
   }
 
@@ -618,6 +651,57 @@ actual class QuickJs private constructor(
     val toIndex = JsValueGetInt(JsValueArrayToInstanceRef(argv, 3))
     val count = JsValueGetInt(JsValueArrayToInstanceRef(argv, 4))
     rdmaChangeSink?.createMove(id, childrenTag, fromIndex, toIndex, count)
+    return JsUndefined()
+  }
+
+  internal fun rdmaAppendBridgeChange(argc: Int, argv: CArrayPointer<JSValue>): CValue<JSValue> {
+    val id = JsValueGetInt(JsValueArrayToInstanceRef(argv, 0))
+    val jsToWrap = JsValueArrayToInstanceRef(argv, 1)
+    val bridgeDispatchVal = JS_GetPropertyStr(context, jsToWrap, "bridge_dispatch")
+    if (JS_IsUndefined(bridgeDispatchVal) != 0) {
+      val ctorName = JS_GetPropertyStr(context, jsToWrap, "constructor")
+      val ctorNameStr = JS_GetPropertyStr(context, ctorName, "name")
+      val cstr = JS_ToCString(context, ctorNameStr)
+      val name = if (cstr != null) cstr.toKStringFromUtf8().also { JS_FreeCString(context, cstr) } else "unknown"
+      JS_FreeValue(context, ctorNameStr)
+      JS_FreeValue(context, ctorName)
+      JS_FreeValue(context, bridgeDispatchVal)
+      throw NullPointerException("bridge_dispatch not set on JS object, constructor: $name")
+    }
+    val dispatchFn = JsValueGetFloat64(bridgeDispatchVal).toRawBits()
+      .toCPointer<CFunction<(CPointer<JSContext>, CValue<JSValue>) -> COpaquePointer?>>()!!
+    val kToWrap = dispatchFn(context, jsToWrap)!!.asStableRef<Any>().get()
+    rdmaChangeSink!!.createBridgeChange(id, kToWrap)
+    JS_FreeValue(context, bridgeDispatchVal)
+    return JsUndefined()
+  }
+
+  // -- Bridge registration table (populated by @WithJS2HostBridge module-level inits) --
+
+  internal fun bridgeRegisterJsHandler(
+    argc: Int,
+    argv: CArrayPointer<JSValue>,
+  ): CValue<JSValue> {
+    if (argc < 2) return JsUndefined()
+    val cstr = JS_ToCString(context, JsValueArrayToInstanceRef(argv, 0))
+    if (cstr == null) return JsUndefined()
+    val fq = cstr.toKStringFromUtf8()
+    JS_FreeCString(context, cstr)
+
+    val ctor = JsValueArrayToInstanceRef(argv, 1)
+    if (JS_IsUndefined(ctor) != 0) return JsUndefined()
+
+    val dispatchFn = bridgeTable[fq]
+    if (dispatchFn == null) {
+      println("BRIDGE: __bridgeRegister FQN not found in bridgeTable: '$fq'")
+      return JsUndefined()
+    }
+
+    val proto = JS_GetPropertyStr(context, ctor, "prototype")
+    val bits = dispatchFn.rawValue.toLong()
+    JS_SetPropertyStr(context, proto, "bridge_dispatch",
+      JsNewFloat64(Double.fromBits(bits)))
+    JS_FreeValue(context, proto)
     return JsUndefined()
   }
 
@@ -872,6 +956,22 @@ internal fun rdmaAppendMoveGlobal(
 }
 
 @Suppress("UNUSED_PARAMETER")
+internal fun rdmaAppendBridgeChangeGlobal(
+  context: CPointer<JSContext>,
+  thisVal: CValue<JSValue>,
+  argc: Int,
+  argv: CArrayPointer<JSValue>,
+): CValue<JSValue> {
+  val quickJs = JS_GetRuntimeOpaque(JS_GetRuntime(context))!!.asStableRef<QuickJs>().get()
+  return try {
+    quickJs.rdmaAppendBridgeChange(argc, argv)
+  } catch (t: Throwable) {
+    t.printStackTrace()
+    throw t
+  }
+}
+
+@Suppress("UNUSED_PARAMETER")
 internal fun rdmaFinishChangesGlobal(
   context: CPointer<JSContext>,
   thisVal: CValue<JSValue>,
@@ -897,6 +997,22 @@ internal fun rdmaChangesLengthGlobal(
   val quickJs = JS_GetRuntimeOpaque(JS_GetRuntime(context))!!.asStableRef<QuickJs>().get()
   return try {
     quickJs.rdmaChangesLength()
+  } catch (t: Throwable) {
+    t.printStackTrace()
+    throw t
+  }
+}
+
+@Suppress("UNUSED_PARAMETER")
+internal fun bridgeRegisterGlobal(
+  context: CPointer<JSContext>,
+  thisVal: CValue<JSValue>,
+  argc: Int,
+  argv: CArrayPointer<JSValue>,
+): CValue<JSValue> {
+  val quickJs = JS_GetRuntimeOpaque(JS_GetRuntime(context))!!.asStableRef<QuickJs>().get()
+  return try {
+    quickJs.bridgeRegisterJsHandler(argc, argv)
   } catch (t: Throwable) {
     t.printStackTrace()
     throw t
