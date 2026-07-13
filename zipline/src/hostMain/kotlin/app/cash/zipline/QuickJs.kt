@@ -88,5 +88,23 @@ expect class QuickJs : AutoCloseable {
    */
   fun gc()
 
+  /**
+   * Callback sink for the RDMA changes channel. Set by the host before the guest
+   * starts rendering. When non-null, JS guest calls to `app_cash_redwood_rdmaSendChanges`
+   * are forwarded to this sink instead of using JSON serialization.
+   *
+   * On Android, this is handled via JNI (Context.cpp). On iOS (Kotlin/Native),
+   * the sink is called directly from Kotlin via [staticCFunction] callbacks.
+   */
+  @EngineApi
+  var rdmaChangeSink: RdmaChangeSink?
+
+  /**
+   * Initialize the RDMA changes channel. Registers a JS-Callable function on globalThis
+   * so the JS guest can send Changes directly via JNI, bypassing JSON serialization.
+   */
+  @EngineApi
+  fun initRdmaChangesChannel()
+
   override fun close()
 }

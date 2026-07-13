@@ -55,3 +55,36 @@ static inline JSCFunctionListEntry JsDisconnectFunction(void *func) {
 static inline JSValue JsValueArrayToInstanceRef(JSValue* v, int i) {
   return v[i];
 }
+
+static inline JSValue JsNewTagInt(int val) {
+  return JS_MKVAL(JS_TAG_INT, val);
+}
+
+// RDMA Changes helpers
+
+static inline JSValue JsNewCFunction(JSContext* ctx, void* func, const char* name, int length) {
+  return JS_NewCFunction(ctx, (JSCFunction*)func, name, length);
+}
+
+static inline void* JsGetOwnPropertyNames(JSContext* ctx, JSValueConst obj, int* count) {
+  JSPropertyEnum *ptab;
+  uint32_t plen;
+  if (JS_GetOwnPropertyNames(ctx, &ptab, &plen, obj, JS_GPN_STRING_MASK) != 0) {
+    *count = 0;
+    return NULL;
+  }
+  *count = (int)plen;
+  return ptab;
+}
+
+static inline const char* JsGetPropertyName(JSContext* ctx, void* ptab, int i) {
+  return JS_AtomToCString(ctx, ((JSPropertyEnum*)ptab)[i].atom);
+}
+
+static inline JSValue JsGetPropertyAt(JSContext* ctx, JSValueConst obj, void* ptab, int i) {
+  return JS_GetProperty(ctx, obj, ((JSPropertyEnum*)ptab)[i].atom);
+}
+
+static inline void JsFreePropertyEnum(JSContext* ctx, void* ptab) {
+  js_free(ctx, ptab);
+}

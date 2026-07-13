@@ -48,6 +48,8 @@ import app.cash.zipline.quickjs.JS_HasProperty
 import app.cash.zipline.quickjs.JS_IsArray
 import app.cash.zipline.quickjs.JS_IsException
 import app.cash.zipline.quickjs.JS_IsUndefined
+import app.cash.zipline.quickjs.JS_NewObject
+import app.cash.zipline.quickjs.JS_SetPropertyStr
 import app.cash.zipline.quickjs.JS_NewAtom
 import app.cash.zipline.quickjs.JS_NewClass
 import app.cash.zipline.quickjs.JS_NewClassID
@@ -84,6 +86,7 @@ import app.cash.zipline.quickjs.JsCallFunction
 import app.cash.zipline.quickjs.JsDisconnectFunction
 import app.cash.zipline.quickjs.JsFalse
 import app.cash.zipline.quickjs.JsTrue
+import app.cash.zipline.quickjs.JsUndefined
 import app.cash.zipline.quickjs.JsValueArrayToInstanceRef
 import app.cash.zipline.quickjs.JsValueGetBool
 import app.cash.zipline.quickjs.JsValueGetFloat64
@@ -91,6 +94,12 @@ import app.cash.zipline.quickjs.JsValueGetInt
 import app.cash.zipline.quickjs.JsValueGetNormTag
 import app.cash.zipline.quickjs.installFinalizationRegistry
 import app.cash.zipline.quickjs.js_free
+import app.cash.zipline.quickjs.JsGetOwnPropertyNames
+import app.cash.zipline.quickjs.JsGetPropertyAt
+import app.cash.zipline.quickjs.JsGetPropertyName
+import app.cash.zipline.quickjs.JsFreePropertyEnum
+import app.cash.zipline.quickjs.JsNewCFunction
+import app.cash.zipline.quickjs.JsNewTagInt
 import kotlin.experimental.ExperimentalNativeApi
 import kotlinx.cinterop.CArrayPointer
 import kotlinx.cinterop.COpaquePointer
@@ -98,6 +107,7 @@ import kotlinx.cinterop.CPointer
 import kotlinx.cinterop.CValue
 import kotlinx.cinterop.CValuesRef
 import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.IntVar
 import kotlinx.cinterop.StableRef
 import kotlinx.cinterop.UByteVar
 import kotlinx.cinterop.alloc
@@ -114,6 +124,14 @@ import kotlinx.cinterop.staticCFunction
 import kotlinx.cinterop.toKStringFromUtf8
 import kotlinx.cinterop.utf8
 import kotlinx.cinterop.value
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import platform.posix.size_tVar
 
 @EngineApi
@@ -149,6 +167,8 @@ actual class QuickJs private constructor(
 
     actual val version: String
       get() = quickJsVersion
+
+    private const val RDMA_BATCH_SIZE = 2048
   }
 
   private val jsInterruptHandlerCFunction = staticCFunction(::jsInterruptHandlerGlobal)
@@ -398,6 +418,60 @@ actual class QuickJs private constructor(
     JS_RunGC(runtime)
   }
 
+  actual var rdmaChangeSink: RdmaChangeSink? = null
+
+  actual fun initRdmaChangesChannel() {
+    if (rdmaChangeSink == null) return
+
+    val globalThis = JS_GetGlobalObject(context)
+
+    val rdmaObj = JS_NewObject(context)
+    if (JS_IsException(rdmaObj) != 0) {
+      JS_FreeValue(context, globalThis)
+      return
+    }
+
+    JS_SetPropertyStr(
+      context, rdmaObj, "appendCreate",
+      JsNewCFunction(context, staticCFunction(::rdmaAppendCreateGlobal), "appendCreate", 2),
+    )
+    JS_SetPropertyStr(
+      context, rdmaObj, "appendPropertyChange",
+      JsNewCFunction(context, staticCFunction(::rdmaAppendPropertyChangeGlobal), "appendPropertyChange", 4),
+    )
+    JS_SetPropertyStr(
+      context, rdmaObj, "appendModifierChange",
+      JsNewCFunction(context, staticCFunction(::rdmaAppendModifierChangeGlobal), "appendModifierChange", 2),
+    )
+    JS_SetPropertyStr(
+      context, rdmaObj, "appendAdd",
+      JsNewCFunction(context, staticCFunction(::rdmaAppendAddGlobal), "appendAdd", 4),
+    )
+    JS_SetPropertyStr(
+      context, rdmaObj, "appendRemove",
+      JsNewCFunction(context, staticCFunction(::rdmaAppendRemoveGlobal), "appendRemove", 3),
+    )
+    JS_SetPropertyStr(
+      context, rdmaObj, "setRemoveDetach",
+      JsNewCFunction(context, staticCFunction(::rdmaSetRemoveDetachGlobal), "setRemoveDetach", 1),
+    )
+    JS_SetPropertyStr(
+      context, rdmaObj, "appendMove",
+      JsNewCFunction(context, staticCFunction(::rdmaAppendMoveGlobal), "appendMove", 5),
+    )
+    JS_SetPropertyStr(
+      context, rdmaObj, "finishChanges",
+      JsNewCFunction(context, staticCFunction(::rdmaFinishChangesGlobal), "finishChanges", 0),
+    )
+    JS_SetPropertyStr(
+      context, rdmaObj, "changesLength",
+      JsNewCFunction(context, staticCFunction(::rdmaChangesLengthGlobal), "changesLength", 0),
+    )
+
+    JS_SetPropertyStr(context, globalThis, "app_cash_redwood_rdmaSendChanges", rdmaObj)
+    JS_FreeValue(context, globalThis)
+  }
+
   actual override fun close() {
     if (!closed) {
       functionList?.let { ptr ->
@@ -478,6 +552,168 @@ actual class QuickJs private constructor(
   private fun Boolean.toJsValue(): CValue<JSValue> {
     return if (this) JsTrue() else JsFalse()
   }
+
+  // --- RDMA Changes Support ---
+
+  private var removeCounter = 0
+
+  internal fun rdmaAppendCreate(argc: Int, argv: CArrayPointer<JSValue>): CValue<JSValue> {
+    val id = JsValueGetInt(JsValueArrayToInstanceRef(argv, 0))
+    val tag = JsValueGetInt(JsValueArrayToInstanceRef(argv, 1))
+    rdmaChangeSink?.createCreate(id, tag)
+    return JsUndefined()
+  }
+
+  internal fun rdmaAppendPropertyChange(argc: Int, argv: CArrayPointer<JSValue>): CValue<JSValue> {
+    val id = JsValueGetInt(JsValueArrayToInstanceRef(argv, 0))
+    val widgetTag = JsValueGetInt(JsValueArrayToInstanceRef(argv, 1))
+    val propertyTag = JsValueGetInt(JsValueArrayToInstanceRef(argv, 2))
+    val jsValue = JsValueArrayToInstanceRef(argv, 3)
+    val value = jsValueToJsonElement(jsValue)
+    rdmaChangeSink?.createPropertyChange(id, widgetTag, propertyTag, value)
+    return JsUndefined()
+  }
+
+  internal fun rdmaAppendModifierChange(argc: Int, argv: CArrayPointer<JSValue>): CValue<JSValue> {
+    val id = JsValueGetInt(JsValueArrayToInstanceRef(argv, 0))
+    val jsValue = JsValueArrayToInstanceRef(argv, 1)
+    val elements = jsArrayToModifierElements(jsValue)
+    rdmaChangeSink?.createModifierChange(id, elements)
+    return JsUndefined()
+  }
+
+  internal fun rdmaAppendAdd(argc: Int, argv: CArrayPointer<JSValue>): CValue<JSValue> {
+    val id = JsValueGetInt(JsValueArrayToInstanceRef(argv, 0))
+    val childrenTag = JsValueGetInt(JsValueArrayToInstanceRef(argv, 1))
+    val childId = JsValueGetInt(JsValueArrayToInstanceRef(argv, 2))
+    val index = JsValueGetInt(JsValueArrayToInstanceRef(argv, 3))
+    rdmaChangeSink?.createAdd(id, childrenTag, childId, index)
+    return JsUndefined()
+  }
+
+  internal fun rdmaAppendRemove(argc: Int, argv: CArrayPointer<JSValue>): CValue<JSValue> {
+    val id = JsValueGetInt(JsValueArrayToInstanceRef(argv, 0))
+    val childrenTag = JsValueGetInt(JsValueArrayToInstanceRef(argv, 1))
+    val index = JsValueGetInt(JsValueArrayToInstanceRef(argv, 2))
+    rdmaChangeSink?.createRemove(id, childrenTag, index, false)
+    val currentIndex = removeCounter
+    removeCounter++
+    return JsNewTagInt(currentIndex)
+  }
+
+  internal fun rdmaSetRemoveDetach(argc: Int, argv: CArrayPointer<JSValue>): CValue<JSValue> {
+    val idx = JsValueGetInt(JsValueArrayToInstanceRef(argv, 0))
+    rdmaChangeSink?.setRemoveDetach(idx)
+    return JsUndefined()
+  }
+
+  internal fun rdmaAppendMove(argc: Int, argv: CArrayPointer<JSValue>): CValue<JSValue> {
+    val id = JsValueGetInt(JsValueArrayToInstanceRef(argv, 0))
+    val childrenTag = JsValueGetInt(JsValueArrayToInstanceRef(argv, 1))
+    val fromIndex = JsValueGetInt(JsValueArrayToInstanceRef(argv, 2))
+    val toIndex = JsValueGetInt(JsValueArrayToInstanceRef(argv, 3))
+    val count = JsValueGetInt(JsValueArrayToInstanceRef(argv, 4))
+    rdmaChangeSink?.createMove(id, childrenTag, fromIndex, toIndex, count)
+    return JsUndefined()
+  }
+
+  internal fun rdmaFinishChanges(): CValue<JSValue> {
+    removeCounter = 0
+    rdmaChangeSink?.sendChanges()
+    return JsUndefined()
+  }
+
+  internal fun rdmaChangesLength(): CValue<JSValue> {
+    return JsNewTagInt(removeCounter)
+  }
+
+  private fun jsValueToJsonElement(jsValue: CValue<JSValue>): JsonElement {
+    return when (JsValueGetNormTag(jsValue)) {
+      JS_TAG_INT -> JsonPrimitive(JsValueGetInt(jsValue))
+      JS_TAG_BOOL -> JsonPrimitive(JsValueGetBool(jsValue) != 0)
+      JS_TAG_FLOAT64 -> {
+        val v = JsValueGetFloat64(jsValue)
+        val lv = v.toLong()
+        if (v == lv.toDouble()) {
+          JsonPrimitive(lv)
+        } else {
+          JsonPrimitive(v)
+        }
+      }
+      JS_TAG_STRING -> {
+        val cString = JS_ToCString(context, jsValue)!!
+        val string = cString.toKStringFromUtf8()
+        JS_FreeCString(context, cString)
+        JsonPrimitive(string)
+      }
+      JS_TAG_NULL, JS_TAG_UNDEFINED -> JsonNull
+      JS_TAG_OBJECT -> {
+        if (JS_IsArray(context, jsValue) != 0) {
+          jsArrayToJsonArray(jsValue)
+        } else {
+          jsObjectToJsonObject(jsValue)
+        }
+      }
+      else -> JsonNull
+    }
+  }
+
+  private fun jsArrayToJsonArray(jsValue: CValue<JSValue>): JsonArray {
+    val lengthProp = JS_GetPropertyStr(context, jsValue, "length")
+    val length = JsValueGetInt(lengthProp)
+    JS_FreeValue(context, lengthProp)
+    return buildJsonArray {
+      for (i in 0 until length) {
+        val element = JS_GetPropertyUint32(context, jsValue, i.convert())
+        val jsonElement = jsValueToJsonElement(element)
+        add(jsonElement)
+        JS_FreeValue(context, element)
+      }
+    }
+  }
+
+  private fun jsObjectToJsonObject(jsValue: CValue<JSValue>): JsonObject {
+    return buildJsonObject {
+      memScoped {
+        val count = alloc<IntVar>()
+        val ptab = JsGetOwnPropertyNames(context, jsValue, count.ptr) ?: return@buildJsonObject
+        val n = count.value
+        for (i in 0 until n) {
+          val keyCStr = JsGetPropertyName(context, ptab, i) ?: continue
+          val key = keyCStr.toKStringFromUtf8()
+          JS_FreeCString(context, keyCStr)
+          val propVal = JsGetPropertyAt(context, jsValue, ptab, i)
+          val jsonElement = jsValueToJsonElement(propVal)
+          put(key, jsonElement)
+          JS_FreeValue(context, propVal)
+        }
+        JsFreePropertyEnum(context, ptab)
+      }
+    }
+  }
+
+  private fun jsArrayToModifierElements(jsValue: CValue<JSValue>): List<Pair<Int, JsonElement>> {
+    val lengthProp = JS_GetPropertyStr(context, jsValue, "length")
+    val length = JsValueGetInt(lengthProp)
+    JS_FreeValue(context, lengthProp)
+    val elements = mutableListOf<Pair<Int, JsonElement>>()
+    for (j in 0 until length) {
+      val elem = JS_GetPropertyUint32(context, jsValue, j.convert())
+      val modTagVal = JS_GetPropertyUint32(context, elem, 0u)
+      val modTag = JsValueGetInt(modTagVal)
+      JS_FreeValue(context, modTagVal)
+      val modVal = JS_GetPropertyUint32(context, elem, 1u)
+      val jsonVal = if (JS_IsUndefined(modVal) != 0) {
+        JsonNull
+      } else {
+        jsValueToJsonElement(modVal)
+      }
+      JS_FreeValue(context, modVal)
+      elements.add(Pair(modTag, jsonVal))
+      JS_FreeValue(context, elem)
+    }
+    return elements
+  }
 }
 
 internal fun jsInterruptHandlerGlobal(runtime: CPointer<JSRuntime>?, opaque: COpaquePointer?): Int {
@@ -513,6 +749,152 @@ internal fun outboundDisconnect(
     quickJs.jsOutboundDisconnect(argc, argv)
   } catch (t: Throwable) {
     t.printStackTrace() // TODO throw to JS return null
+    throw t
+  }
+}
+
+// --- RDMA Changes C callbacks (registered via staticCFunction) ---
+
+@Suppress("UNUSED_PARAMETER")
+internal fun rdmaAppendCreateGlobal(
+  context: CPointer<JSContext>,
+  thisVal: CValue<JSValue>,
+  argc: Int,
+  argv: CArrayPointer<JSValue>,
+): CValue<JSValue> {
+  val quickJs = JS_GetRuntimeOpaque(JS_GetRuntime(context))!!.asStableRef<QuickJs>().get()
+  return try {
+    quickJs.rdmaAppendCreate(argc, argv)
+  } catch (t: Throwable) {
+    t.printStackTrace()
+    throw t
+  }
+}
+
+@Suppress("UNUSED_PARAMETER")
+internal fun rdmaAppendPropertyChangeGlobal(
+  context: CPointer<JSContext>,
+  thisVal: CValue<JSValue>,
+  argc: Int,
+  argv: CArrayPointer<JSValue>,
+): CValue<JSValue> {
+  val quickJs = JS_GetRuntimeOpaque(JS_GetRuntime(context))!!.asStableRef<QuickJs>().get()
+  return try {
+    quickJs.rdmaAppendPropertyChange(argc, argv)
+  } catch (t: Throwable) {
+    t.printStackTrace()
+    throw t
+  }
+}
+
+@Suppress("UNUSED_PARAMETER")
+internal fun rdmaAppendModifierChangeGlobal(
+  context: CPointer<JSContext>,
+  thisVal: CValue<JSValue>,
+  argc: Int,
+  argv: CArrayPointer<JSValue>,
+): CValue<JSValue> {
+  val quickJs = JS_GetRuntimeOpaque(JS_GetRuntime(context))!!.asStableRef<QuickJs>().get()
+  return try {
+    quickJs.rdmaAppendModifierChange(argc, argv)
+  } catch (t: Throwable) {
+    t.printStackTrace()
+    throw t
+  }
+}
+
+@Suppress("UNUSED_PARAMETER")
+internal fun rdmaAppendAddGlobal(
+  context: CPointer<JSContext>,
+  thisVal: CValue<JSValue>,
+  argc: Int,
+  argv: CArrayPointer<JSValue>,
+): CValue<JSValue> {
+  val quickJs = JS_GetRuntimeOpaque(JS_GetRuntime(context))!!.asStableRef<QuickJs>().get()
+  return try {
+    quickJs.rdmaAppendAdd(argc, argv)
+  } catch (t: Throwable) {
+    t.printStackTrace()
+    throw t
+  }
+}
+
+@Suppress("UNUSED_PARAMETER")
+internal fun rdmaAppendRemoveGlobal(
+  context: CPointer<JSContext>,
+  thisVal: CValue<JSValue>,
+  argc: Int,
+  argv: CArrayPointer<JSValue>,
+): CValue<JSValue> {
+  val quickJs = JS_GetRuntimeOpaque(JS_GetRuntime(context))!!.asStableRef<QuickJs>().get()
+  return try {
+    quickJs.rdmaAppendRemove(argc, argv)
+  } catch (t: Throwable) {
+    t.printStackTrace()
+    throw t
+  }
+}
+
+@Suppress("UNUSED_PARAMETER")
+internal fun rdmaSetRemoveDetachGlobal(
+  context: CPointer<JSContext>,
+  thisVal: CValue<JSValue>,
+  argc: Int,
+  argv: CArrayPointer<JSValue>,
+): CValue<JSValue> {
+  val quickJs = JS_GetRuntimeOpaque(JS_GetRuntime(context))!!.asStableRef<QuickJs>().get()
+  return try {
+    quickJs.rdmaSetRemoveDetach(argc, argv)
+  } catch (t: Throwable) {
+    t.printStackTrace()
+    throw t
+  }
+}
+
+@Suppress("UNUSED_PARAMETER")
+internal fun rdmaAppendMoveGlobal(
+  context: CPointer<JSContext>,
+  thisVal: CValue<JSValue>,
+  argc: Int,
+  argv: CArrayPointer<JSValue>,
+): CValue<JSValue> {
+  val quickJs = JS_GetRuntimeOpaque(JS_GetRuntime(context))!!.asStableRef<QuickJs>().get()
+  return try {
+    quickJs.rdmaAppendMove(argc, argv)
+  } catch (t: Throwable) {
+    t.printStackTrace()
+    throw t
+  }
+}
+
+@Suppress("UNUSED_PARAMETER")
+internal fun rdmaFinishChangesGlobal(
+  context: CPointer<JSContext>,
+  thisVal: CValue<JSValue>,
+  argc: Int,
+  argv: CArrayPointer<JSValue>,
+): CValue<JSValue> {
+  val quickJs = JS_GetRuntimeOpaque(JS_GetRuntime(context))!!.asStableRef<QuickJs>().get()
+  return try {
+    quickJs.rdmaFinishChanges()
+  } catch (t: Throwable) {
+    t.printStackTrace()
+    throw t
+  }
+}
+
+@Suppress("UNUSED_PARAMETER")
+internal fun rdmaChangesLengthGlobal(
+  context: CPointer<JSContext>,
+  thisVal: CValue<JSValue>,
+  argc: Int,
+  argv: CArrayPointer<JSValue>,
+): CValue<JSValue> {
+  val quickJs = JS_GetRuntimeOpaque(JS_GetRuntime(context))!!.asStableRef<QuickJs>().get()
+  return try {
+    quickJs.rdmaChangesLength()
+  } catch (t: Throwable) {
+    t.printStackTrace()
     throw t
   }
 }

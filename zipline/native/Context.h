@@ -26,6 +26,28 @@ class JSRuntime;
 class JSContext;
 class InboundCallChannel;
 
+enum class RdmaChangeType {
+  Create,
+  PropertyChange,
+  ModifierChange,
+  Add,
+  Remove,
+  Move,
+};
+
+constexpr int BATCH_SIZE = 2048;
+
+struct RdmaChange {
+  RdmaChangeType type;
+  int id;
+  int field1;    // tag (Create/Remove/Move), widgetTag (PropertyChange), childrenTag (Add)
+  int field2;    // propertyTag (PropertyChange), childId (Add), index (Remove), fromIndex (Move)
+  int field3;    // index (Add), toIndex (Move)
+  int count;     // count (Move only)
+  bool detach;   // detach flag (Remove only)
+  JSValueConst jsValue; // JS payload for PropertyChange, ModifierChange; JS_NULL otherwise
+};
+
 class Context {
 public:
   Context(JNIEnv *env);
@@ -81,6 +103,44 @@ public:
   jobject interruptHandler;
   std::vector<InboundCallChannel*> callChannels;
   std::unordered_map<std::string, jclass> globalReferences;
+
+  // JNI cache for RdmaBridge (static factories)
+  jclass rdmaBridgeClass;
+  jmethodID rdmaBridgeCreateCreate;
+  jmethodID rdmaBridgeCreateAdd;
+  jmethodID rdmaBridgeCreateRemove;
+  jmethodID rdmaBridgeCreateMove;
+  jmethodID rdmaBridgeCreatePropertyChange;
+  jmethodID rdmaBridgeCreateModifierChange;
+  jmethodID rdmaBridgeCreateModifierElement;
+  jmethodID rdmaBridgeJsonPrimitiveString;
+  jmethodID rdmaBridgeJsonPrimitiveInt;
+  jmethodID rdmaBridgeJsonPrimitiveLong;
+  jmethodID rdmaBridgeJsonPrimitiveDouble;
+  jmethodID rdmaBridgeJsonPrimitiveBoolean;
+  jmethodID rdmaBridgeJsonNull;
+  jmethodID rdmaBridgeCreateJsonArray;
+  jmethodID rdmaBridgeCreateJsonObject;
+
+  // JNI cache for ArrayList
+  jclass arrayListClass;
+  jmethodID arrayListInit;
+  jmethodID arrayListInitWithCapacity;
+  jmethodID arrayListAdd;
+
+  jobject rdmaBridgeInstance;
+  jmethodID rdmaBridgeSendChanges;
+  jmethodID rdmaBridgeSendBatch;
+
+  jobject changesList;
+  std::vector<RdmaChange> pendingChanges;
+  jobject jsValueToJsonElement(JNIEnv* env, JSValueConst val);
+  jobject jsArrayToJsonElement(JNIEnv* env, JSValueConst val);
+  jobject jsObjectToJsonElement(JNIEnv* env, JSValueConst val);
+  void flushPendingBatch(JNIEnv* env, int count);
+  void finishFlushPending(JNIEnv* env);
+  void cacheRdmaBridgeMethods(JNIEnv* env);
+  void initRdmaChangesChannel(JNIEnv* env);
 };
 
 #endif //QUICKJS_ANDROID_CONTEXT_H

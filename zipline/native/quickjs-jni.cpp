@@ -136,6 +136,16 @@ Java_app_cash_zipline_QuickJs_setMaxStackSize(JNIEnv* env, jobject type, jlong c
   context->setMaxStackSize(env, stackSize);
 }
 
+extern "C" JNIEXPORT void JNICALL
+Java_app_cash_zipline_QuickJs_initRdmaChangesChannel(JNIEnv* env, jobject, jlong context_) {
+  Context* context = reinterpret_cast<Context*>(context_);
+  if (!context) {
+    throwJavaException(env, "java/lang/IllegalStateException", "QuickJs instance was closed");
+    return;
+  }
+  context->initRdmaChangesChannel(env);
+}
+
 extern "C" JNIEXPORT jstring JNICALL
 Java_app_cash_zipline_JniCallChannel_call(JNIEnv* env, jobject thiz, jlong _context,
                                           jlong instance, jstring callJson) {
