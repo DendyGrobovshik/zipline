@@ -77,6 +77,8 @@ actual class QuickJs private constructor(
       setInterruptHandler(context, value)
     }
 
+  actual var rdmaChangeSink: RdmaChangeSink? = null
+
   /** Memory usage statistics for the JavaScript engine. */
   actual val memoryUsage: MemoryUsage
     get() = memoryUsage(context) ?: throw AssertionError()
@@ -115,6 +117,10 @@ actual class QuickJs private constructor(
 
   internal actual fun initOutboundChannel(outboundChannel: CallChannel) {
     setOutboundCallChannel(context, OUTBOUND_CHANNEL_NAME, outboundChannel)
+  }
+
+  actual fun initRdmaChangesChannel() {
+    initRdmaChangesChannel(context)
   }
 
   internal actual fun getInboundChannel(): CallChannel {
@@ -174,6 +180,8 @@ actual class QuickJs private constructor(
   private external fun setGcThreshold(context: Long, gcThreshold: Long)
   private external fun gc(context: Long)
   private external fun setMaxStackSize(context: Long, stackSize: Long)
+  @JvmName("initRdmaChangesChannel")
+  private external fun initRdmaChangesChannel(context: Long)
 }
 
 internal expect fun loadNativeLibrary()

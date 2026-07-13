@@ -43,6 +43,14 @@ int jsInterruptHandlerPoll(JSRuntime* jsRuntime, void *opaque) {
   return halt;
 }
 
+static inline Context* getContext(JSContext* ctx) {
+  auto* context = reinterpret_cast<Context*>(JS_GetRuntimeOpaque(JS_GetRuntime(ctx)));
+  if (!context) {
+    JS_ThrowInternalError(ctx, "Runtime Context is null");
+  }
+  return context;
+}
+
 namespace {
 
 void jsFinalizeOutboundCallChannel(JSRuntime* jsRuntime, JSValue val) {
@@ -120,6 +128,11 @@ Context::~Context() {
   env->DeleteGlobalRef(interruptHandlerClass);
   env->DeleteGlobalRef(quickJsExceptionClass);
   env->DeleteGlobalRef(stringUtf8);
+  if (rdmaBridgeInstance != nullptr) {
+    env->DeleteGlobalRef(rdmaBridgeInstance);
+  }
+  env->DeleteGlobalRef(rdmaBridgeClass);
+  env->DeleteGlobalRef(arrayListClass);
   env->DeleteGlobalRef(stringClass);
   env->DeleteGlobalRef(objectClass);
   env->DeleteGlobalRef(doubleClass);
@@ -516,4 +529,450 @@ jstring Context::toJavaString(JNIEnv* env, const JSValueConst& value) const {
   jstring result = static_cast<jstring>(env->NewObject(stringClass, stringConstructor, utf8BytesObject, stringUtf8));
   env->DeleteLocalRef(utf8BytesObject);
   return result;
+}
+
+void Context::cacheRdmaBridgeMethods(JNIEnv* env) {
+  jclass cls = env->FindClass("app/cash/redwood/treehouse/RdmaBridge");
+  this->rdmaBridgeClass = static_cast<jclass>(env->NewGlobalRef(cls));
+  if (!this->rdmaBridgeClass) return;
+
+  // Change factories
+  this->rdmaBridgeCreateCreate = env->GetStaticMethodID(
+      cls, "createCreate", "(II)Lapp/cash/redwood/protocol/Create;");
+  this->rdmaBridgeCreateAdd = env->GetStaticMethodID(
+      cls, "createAdd", "(IIII)Lapp/cash/redwood/protocol/ChildrenChange;");
+  this->rdmaBridgeCreateRemove = env->GetStaticMethodID(
+      cls, "createRemove", "(IIIZ)Lapp/cash/redwood/protocol/ChildrenChange;");
+  this->rdmaBridgeCreateMove = env->GetStaticMethodID(
+      cls, "createMove", "(IIIII)Lapp/cash/redwood/protocol/ChildrenChange;");
+  this->rdmaBridgeCreatePropertyChange = env->GetStaticMethodID(
+      cls, "createPropertyChange",
+      "(IIILkotlinx/serialization/json/JsonElement;)Lapp/cash/redwood/protocol/PropertyChange;");
+  this->rdmaBridgeCreateModifierChange = env->GetStaticMethodID(
+      cls, "createModifierChange",
+      "(ILjava/util/List;)Lapp/cash/redwood/protocol/ModifierChange;");
+  this->rdmaBridgeCreateModifierElement = env->GetStaticMethodID(
+      cls, "createModifierElement",
+      "(ILkotlinx/serialization/json/JsonElement;)Lapp/cash/redwood/protocol/ModifierElement;");
+
+  // JsonElement factories
+  this->rdmaBridgeJsonPrimitiveString = env->GetStaticMethodID(
+      cls, "jsonPrimitiveString",
+      "(Ljava/lang/String;)Lkotlinx/serialization/json/JsonPrimitive;");
+  this->rdmaBridgeJsonPrimitiveInt = env->GetStaticMethodID(
+      cls, "jsonPrimitiveInt", "(I)Lkotlinx/serialization/json/JsonPrimitive;");
+  this->rdmaBridgeJsonPrimitiveLong = env->GetStaticMethodID(
+    cls, "jsonPrimitiveLong", "(J)Lkotlinx/serialization/json/JsonPrimitive;");
+  this->rdmaBridgeJsonPrimitiveDouble = env->GetStaticMethodID(
+      cls, "jsonPrimitiveDouble", "(D)Lkotlinx/serialization/json/JsonPrimitive;");
+  this->rdmaBridgeJsonPrimitiveBoolean = env->GetStaticMethodID(
+      cls, "jsonPrimitiveBoolean", "(Z)Lkotlinx/serialization/json/JsonPrimitive;");
+  this->rdmaBridgeJsonNull = env->GetStaticMethodID(
+      cls, "jsonNull", "()Lkotlinx/serialization/json/JsonNull;");
+  this->rdmaBridgeCreateJsonArray = env->GetStaticMethodID(
+      cls, "createJsonArray",
+      "(Ljava/util/List;)Lkotlinx/serialization/json/JsonArray;");
+  this->rdmaBridgeCreateJsonObject = env->GetStaticMethodID(
+      cls, "createJsonObject",
+      "(Ljava/util/List;Ljava/util/List;)Lkotlinx/serialization/json/JsonObject;");
+
+  // ArrayList
+  jclass alCls = env->FindClass("java/util/ArrayList");
+  this->arrayListClass = static_cast<jclass>(env->NewGlobalRef(alCls));
+  this->arrayListInit = env->GetMethodID(alCls, "<init>", "()V");
+  this->arrayListInitWithCapacity = env->GetMethodID(alCls, "<init>", "(I)V");
+  this->arrayListAdd = env->GetMethodID(alCls, "add", "(Ljava/lang/Object;)Z");
+
+  // Get INSTANCE (Kotlin object singleton) for calling sendChanges
+  jfieldID instanceField = env->GetStaticFieldID(cls, "INSTANCE",
+      "Lapp/cash/redwood/treehouse/RdmaBridge;");
+  this->rdmaBridgeInstance = env->NewGlobalRef(
+      env->GetStaticObjectField(cls, instanceField));
+
+  // sendChanges is an instance method (override of ChangesSink.sendChanges)
+  jclass csCls = env->FindClass("app/cash/redwood/protocol/ChangesSink");
+  this->rdmaBridgeSendChanges = env->GetMethodID(csCls, "sendChanges",
+      "(Ljava/util/List;)V");
+
+  // sendBatch is a static method on RdmaBridge
+  this->rdmaBridgeSendBatch = env->GetStaticMethodID(cls, "sendBatch",
+      "(Ljava/util/List;)V");
+
+  pendingChanges.reserve(BATCH_SIZE);
+}
+
+static int readIntProp(JSContext* ctx, JSValueConst obj, const char* name) {
+  JSValue prop = JS_GetPropertyStr(ctx, obj, name);
+  int result = JS_VALUE_GET_INT(prop);
+  JS_FreeValue(ctx, prop);
+  return result;
+}
+
+jobject Context::jsValueToJsonElement(JNIEnv* env, JSValueConst val) {
+  switch (JS_VALUE_GET_NORM_TAG(val)) {
+    case JS_TAG_INT: {
+      jint v = JS_VALUE_GET_INT(val);
+      return env->CallStaticObjectMethod(
+          rdmaBridgeClass, rdmaBridgeJsonPrimitiveInt, v);
+    }
+    case JS_TAG_FLOAT64: {
+      jdouble v = JS_VALUE_GET_FLOAT64(val);
+      jlong lv = (jlong)v;
+
+      if (v == (jdouble)lv) { // Whether JS number is long
+          return env->CallStaticObjectMethod(
+              rdmaBridgeClass, rdmaBridgeJsonPrimitiveLong, lv);
+      }
+      return env->CallStaticObjectMethod(
+        rdmaBridgeClass, rdmaBridgeJsonPrimitiveDouble, v);
+    }
+    case JS_TAG_BOOL: {
+      jboolean v = JS_VALUE_GET_BOOL(val) ? JNI_TRUE : JNI_FALSE;
+      return env->CallStaticObjectMethod(
+          rdmaBridgeClass, rdmaBridgeJsonPrimitiveBoolean, v);
+    }
+    case JS_TAG_STRING: {
+      jstring s = toJavaString(env, val);
+      jobject result = env->CallStaticObjectMethod(
+          rdmaBridgeClass, rdmaBridgeJsonPrimitiveString, s);
+      env->DeleteLocalRef(s);
+      return result;
+    }
+    case JS_TAG_NULL:
+    case JS_TAG_UNDEFINED:
+      return env->CallStaticObjectMethod(
+          rdmaBridgeClass, rdmaBridgeJsonNull);
+    case JS_TAG_OBJECT:
+      if (JS_IsArray(jsContext, val)) {
+        return jsArrayToJsonElement(env, val);
+      } else {
+        return jsObjectToJsonElement(env, val);
+      }
+    default:
+      return nullptr;
+  }
+}
+
+jobject Context::jsArrayToJsonElement(JNIEnv* env, JSValueConst val) {
+  uint32_t length = readIntProp(jsContext, val, "length");
+
+  jobject arrayList = env->NewObject(arrayListClass, arrayListInitWithCapacity, (int)length);
+  for (uint32_t i = 0; i < length; i++) {
+    JSValue element = JS_GetPropertyUint32(jsContext, val, i);
+    jobject jsonElement = jsValueToJsonElement(env, element);
+    if (jsonElement != nullptr) {
+      env->CallBooleanMethod(arrayList, arrayListAdd, jsonElement);
+      env->DeleteLocalRef(jsonElement);
+    }
+    JS_FreeValue(jsContext, element);
+  }
+  jobject result = env->CallStaticObjectMethod(
+      rdmaBridgeClass, rdmaBridgeCreateJsonArray, arrayList);
+  env->DeleteLocalRef(arrayList);
+  return result;
+}
+
+jobject Context::jsObjectToJsonElement(JNIEnv* env, JSValueConst val) {
+  JSPropertyEnum* ptab;
+  uint32_t plen;
+  if (JS_GetOwnPropertyNames(jsContext, &ptab, &plen, val,
+                             JS_GPN_STRING_MASK) != 0) {
+    return nullptr;
+  }
+
+  jobject keysList = env->NewObject(arrayListClass, arrayListInitWithCapacity, (int)plen);
+  jobject valuesList = env->NewObject(arrayListClass, arrayListInitWithCapacity, (int)plen);
+
+  for (uint32_t i = 0; i < plen; i++) {
+    const char* keyCStr = JS_AtomToCString(jsContext, ptab[i].atom);
+    if (!keyCStr) continue;
+    JSValue propVal = JS_GetProperty(jsContext, val, ptab[i].atom);
+    jstring keyJava = env->NewStringUTF(keyCStr);
+    jobject jsonElement = jsValueToJsonElement(env, propVal);
+    if (jsonElement != nullptr) {
+      env->CallBooleanMethod(keysList, arrayListAdd, keyJava);
+      env->CallBooleanMethod(valuesList, arrayListAdd, jsonElement);
+      env->DeleteLocalRef(jsonElement);
+    }
+    env->DeleteLocalRef(keyJava);
+    JS_FreeValue(jsContext, propVal);
+    JS_FreeCString(jsContext, keyCStr);
+    JS_FreeAtom(jsContext, ptab[i].atom);
+  }
+  js_free(jsContext, ptab);
+
+  jobject result = env->CallStaticObjectMethod(
+      rdmaBridgeClass, rdmaBridgeCreateJsonObject, keysList, valuesList);
+  env->DeleteLocalRef(keysList);
+  env->DeleteLocalRef(valuesList);
+  return result;
+}
+
+static inline RdmaChange changeCopy(const RdmaChange& ch) { return ch; }
+
+static jobject rdmaChangeToJava(JNIEnv* env, const RdmaChange& ch, Context* context) {
+  switch (ch.type) {
+    case RdmaChangeType::Create:
+      return env->CallStaticObjectMethod(context->rdmaBridgeClass, context->rdmaBridgeCreateCreate, ch.id, ch.field1);
+    case RdmaChangeType::PropertyChange: {
+      jobject jsonElement = context->jsValueToJsonElement(env, ch.jsValue);
+      jobject result = env->CallStaticObjectMethod(context->rdmaBridgeClass, context->rdmaBridgeCreatePropertyChange,
+          ch.id, ch.field1, ch.field2, jsonElement);
+      if (jsonElement) env->DeleteLocalRef(jsonElement);
+      return result;
+    }
+    case RdmaChangeType::ModifierChange: {
+      jobject elementsList = env->NewObject(context->arrayListClass, context->arrayListInit);
+      if (JS_IsArray(context->jsContext, ch.jsValue)) {
+        uint32_t numElements = readIntProp(context->jsContext, ch.jsValue, "length");
+        for (uint32_t j = 0; j < numElements; j++) {
+          JSValue elem = JS_GetPropertyUint32(context->jsContext, ch.jsValue, j);
+          JSValue modTagVal = JS_GetPropertyUint32(context->jsContext, elem, 0);
+          int mTag = JS_VALUE_GET_INT(modTagVal);
+          JS_FreeValue(context->jsContext, modTagVal);
+          JSValue modVal = JS_GetPropertyUint32(context->jsContext, elem, 1);
+          jobject jModVal = JS_IsUndefined(modVal)
+              ? env->CallStaticObjectMethod(context->rdmaBridgeClass, context->rdmaBridgeJsonNull)
+              : context->jsValueToJsonElement(env, modVal);
+          jobject modElement = env->CallStaticObjectMethod(context->rdmaBridgeClass, context->rdmaBridgeCreateModifierElement, mTag, jModVal);
+          env->CallBooleanMethod(elementsList, context->arrayListAdd, modElement);
+          if (jModVal) env->DeleteLocalRef(jModVal);
+          env->DeleteLocalRef(modElement);
+          JS_FreeValue(context->jsContext, modVal);
+          JS_FreeValue(context->jsContext, elem);
+        }
+      }
+      jobject result = env->CallStaticObjectMethod(context->rdmaBridgeClass, context->rdmaBridgeCreateModifierChange, ch.id, elementsList);
+      env->DeleteLocalRef(elementsList);
+      return result;
+    }
+    case RdmaChangeType::Add:
+      return env->CallStaticObjectMethod(context->rdmaBridgeClass, context->rdmaBridgeCreateAdd, ch.id, ch.field1, ch.field2, ch.field3);
+    case RdmaChangeType::Remove:
+      return env->CallStaticObjectMethod(context->rdmaBridgeClass, context->rdmaBridgeCreateRemove,
+          ch.id, ch.field1, ch.field2, ch.detach ? JNI_TRUE : JNI_FALSE);
+    case RdmaChangeType::Move:
+      return env->CallStaticObjectMethod(context->rdmaBridgeClass, context->rdmaBridgeCreateMove, ch.id, ch.field1, ch.field2, ch.field3, ch.count);
+  }
+  return nullptr;
+}
+
+void Context::flushPendingBatch(JNIEnv* env, int toFlush) {
+  jobject list = env->NewObject(arrayListClass, arrayListInitWithCapacity, toFlush);
+  if (!list) return;
+
+  for (int i = 0; i < toFlush; i++) {
+    const RdmaChange& ch = pendingChanges[i];
+    jobject change = rdmaChangeToJava(env, ch, this);
+    if (change) {
+      env->CallBooleanMethod(list, arrayListAdd, change);
+      env->DeleteLocalRef(change);
+    }
+  }
+  env->CallStaticVoidMethod(rdmaBridgeClass, rdmaBridgeSendBatch, list);
+  env->DeleteLocalRef(list);
+  pendingChanges.erase(pendingChanges.begin(), pendingChanges.begin() + toFlush);
+}
+
+void Context::finishFlushPending(JNIEnv* env) {
+  int remaining = (int)pendingChanges.size();
+  if (remaining == 0) return;
+
+  jobject list = env->NewObject(arrayListClass, arrayListInitWithCapacity, remaining);
+  if (!list) return;
+
+  for (int i = 0; i < remaining; i++) {
+    const RdmaChange& ch = pendingChanges[i];
+    jobject change = rdmaChangeToJava(env, ch, this);
+    if (change) {
+      env->CallBooleanMethod(list, arrayListAdd, change);
+      env->DeleteLocalRef(change);
+    }
+  }
+  env->CallVoidMethod(rdmaBridgeInstance, rdmaBridgeSendChanges, list);
+  env->DeleteLocalRef(list);
+  pendingChanges.clear();
+}
+
+static inline void flushIfBatchFull(Context* context) {
+  if ((int)context->pendingChanges.size() >= BATCH_SIZE) {
+    auto env = context->getEnv();
+    if (env) context->flushPendingBatch(env, BATCH_SIZE);
+  }
+}
+
+static JSValue rdmaAppendCreate(
+    JSContext* ctx, JSValueConst thisVal,
+    int argc, JSValueConst* argv
+) {
+  auto* context = getContext(ctx);
+
+  RdmaChange ch;
+  ch.type = RdmaChangeType::Create;
+  ch.id = JS_VALUE_GET_INT(argv[0]);
+  ch.field1 = JS_VALUE_GET_INT(argv[1]);
+  ch.jsValue = JS_NULL;
+  context->pendingChanges.push_back(ch);
+  flushIfBatchFull(context);
+  return JS_UNDEFINED;
+}
+
+static JSValue rdmaAppendPropertyChange(
+    JSContext* ctx, JSValueConst thisVal,
+    int argc, JSValueConst* argv
+) {
+  auto* context = getContext(ctx);
+
+  RdmaChange ch;
+  ch.type = RdmaChangeType::PropertyChange;
+  ch.id = JS_VALUE_GET_INT(argv[0]);
+  ch.field1 = JS_VALUE_GET_INT(argv[1]);
+  ch.field2 = JS_VALUE_GET_INT(argv[2]);
+  ch.jsValue = argv[3];
+  context->pendingChanges.push_back(ch);
+  flushIfBatchFull(context);
+  return JS_UNDEFINED;
+}
+
+static JSValue rdmaAppendModifierChange(
+    JSContext* ctx, JSValueConst thisVal,
+    int argc, JSValueConst* argv
+) {
+  auto* context = getContext(ctx);
+
+  RdmaChange ch;
+  ch.type = RdmaChangeType::ModifierChange;
+  ch.id = JS_VALUE_GET_INT(argv[0]);
+  ch.jsValue = argv[1];
+  context->pendingChanges.push_back(ch);
+  flushIfBatchFull(context);
+  return JS_UNDEFINED;
+}
+
+static JSValue rdmaAppendAdd(
+    JSContext* ctx, JSValueConst thisVal,
+    int argc, JSValueConst* argv
+) {
+  auto* context = getContext(ctx);
+
+  RdmaChange ch;
+  ch.type = RdmaChangeType::Add;
+  ch.id = JS_VALUE_GET_INT(argv[0]);
+  ch.field1 = JS_VALUE_GET_INT(argv[1]);
+  ch.field2 = JS_VALUE_GET_INT(argv[2]);
+  ch.field3 = JS_VALUE_GET_INT(argv[3]);
+  ch.jsValue = JS_NULL;
+  context->pendingChanges.push_back(ch);
+  flushIfBatchFull(context);
+  return JS_UNDEFINED;
+}
+
+static JSValue rdmaAppendRemove(
+    JSContext* ctx, JSValueConst thisVal,
+    int argc, JSValueConst* argv
+) {
+  auto* context = getContext(ctx);
+
+  RdmaChange ch;
+  ch.type = RdmaChangeType::Remove;
+  ch.id = JS_VALUE_GET_INT(argv[0]);
+  ch.field1 = JS_VALUE_GET_INT(argv[1]);
+  ch.field2 = JS_VALUE_GET_INT(argv[2]);
+  ch.detach = false;
+  ch.jsValue = JS_NULL;
+  context->pendingChanges.push_back(ch);
+  flushIfBatchFull(context);
+  return JS_UNDEFINED;
+}
+
+static JSValue rdmaSetRemoveDetach(
+    JSContext* ctx, JSValueConst thisVal,
+    int argc, JSValueConst* argv
+) {
+  auto* context = getContext(ctx);
+
+  int idx = JS_VALUE_GET_INT(argv[0]);
+  if (idx >= 0 && idx < (int)context->pendingChanges.size()) {
+    RdmaChange& ch = context->pendingChanges[idx];
+    if (ch.type == RdmaChangeType::Remove) {
+      ch.detach = true;
+    }
+  }
+  return JS_UNDEFINED;
+}
+
+static JSValue rdmaAppendMove(
+    JSContext* ctx, JSValueConst thisVal,
+    int argc, JSValueConst* argv
+) {
+  auto* context = getContext(ctx);
+
+  RdmaChange ch;
+  ch.type = RdmaChangeType::Move;
+  ch.id = JS_VALUE_GET_INT(argv[0]);
+  ch.field1 = JS_VALUE_GET_INT(argv[1]);
+  ch.field2 = JS_VALUE_GET_INT(argv[2]);
+  ch.field3 = JS_VALUE_GET_INT(argv[3]);
+  ch.count = JS_VALUE_GET_INT(argv[4]);
+  ch.jsValue = JS_NULL;
+  context->pendingChanges.push_back(ch);
+  flushIfBatchFull(context);
+  return JS_UNDEFINED;
+}
+
+static JSValue rdmaFinishChangesCallback(
+    JSContext* ctx, JSValueConst thisVal,
+    int argc, JSValueConst* argv) {
+  auto* context = getContext(ctx);
+
+  auto env = context->getEnv();
+  if (!env) return JS_UNDEFINED;
+
+  context->finishFlushPending(env);
+  return JS_UNDEFINED;
+}
+
+static JSValue rdmaChangesLengthCallback(
+    JSContext* ctx, JSValueConst thisVal,
+    int argc, JSValueConst* argv) {
+  auto* context = getContext(ctx);
+
+  int size = (int)context->pendingChanges.size();
+  return JS_MKVAL(JS_TAG_INT, size);
+}
+
+void Context::initRdmaChangesChannel(JNIEnv* env) {
+  cacheRdmaBridgeMethods(env);
+
+  JSValue global = JS_GetGlobalObject(jsContext);
+
+  JSValue rdmaObj = JS_NewObject(jsContext);
+  if (JS_IsException(rdmaObj)) {
+    JS_FreeValue(jsContext, global);
+    return;
+  }
+
+  JS_SetPropertyStr(jsContext, rdmaObj, "appendCreate",
+      JS_NewCFunction(jsContext, rdmaAppendCreate, "appendCreate", 2));
+  JS_SetPropertyStr(jsContext, rdmaObj, "appendPropertyChange",
+      JS_NewCFunction(jsContext, rdmaAppendPropertyChange, "appendPropertyChange", 4));
+  JS_SetPropertyStr(jsContext, rdmaObj, "appendModifierChange",
+      JS_NewCFunction(jsContext, rdmaAppendModifierChange, "appendModifierChange", 2));
+  JS_SetPropertyStr(jsContext, rdmaObj, "appendAdd",
+      JS_NewCFunction(jsContext, rdmaAppendAdd, "appendAdd", 4));
+  JS_SetPropertyStr(jsContext, rdmaObj, "appendRemove",
+      JS_NewCFunction(jsContext, rdmaAppendRemove, "appendRemove", 3));
+  JS_SetPropertyStr(jsContext, rdmaObj, "setRemoveDetach",
+      JS_NewCFunction(jsContext, rdmaSetRemoveDetach, "setRemoveDetach", 1));
+  JS_SetPropertyStr(jsContext, rdmaObj, "appendMove",
+      JS_NewCFunction(jsContext, rdmaAppendMove, "appendMove", 5));
+  JS_SetPropertyStr(jsContext, rdmaObj, "finishChanges",
+      JS_NewCFunction(jsContext, rdmaFinishChangesCallback, "finishChanges", 0));
+  JS_SetPropertyStr(jsContext, rdmaObj, "changesLength",
+      JS_NewCFunction(jsContext, rdmaChangesLengthCallback, "changesLength", 0));
+
+  int setResult = JS_SetPropertyStr(jsContext, global,
+      "app_cash_redwood_rdmaSendChanges", rdmaObj);
+
+  JS_FreeValue(jsContext, global);
 }
