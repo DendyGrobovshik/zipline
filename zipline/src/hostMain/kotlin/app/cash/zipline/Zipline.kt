@@ -92,8 +92,6 @@ actual class Zipline private constructor(
   init {
     // Eagerly publish the channel so the guest can call us.
     quickJs.initOutboundChannel(endpoint.inboundChannel)
-    quickJs.initRdmaChangesChannel()
-
 
     val eventLoop = CoroutineEventLoop(dispatcher, scope, guest)
 
