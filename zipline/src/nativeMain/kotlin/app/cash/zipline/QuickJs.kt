@@ -94,6 +94,7 @@ import app.cash.zipline.quickjs.JsValueGetInt
 import app.cash.zipline.quickjs.JsValueGetNormTag
 import app.cash.zipline.quickjs.installFinalizationRegistry
 import app.cash.zipline.quickjs.js_free
+import app.cash.zipline.quickjs.js_intset_register_builtins
 import app.cash.zipline.quickjs.JsGetOwnPropertyNames
 import app.cash.zipline.quickjs.JsGetPropertyAt
 import app.cash.zipline.quickjs.JsGetPropertyName
@@ -162,6 +163,7 @@ actual class QuickJs private constructor(
           gcThreshold = 256L * 1024L
           maxStackSize = 512L * 1024L // Override the QuickJS default which is 256 KiB
           installFinalizationRegistry(context, contextForCompiling)
+          js_intset_register_builtins(context)
         }
     }
 
