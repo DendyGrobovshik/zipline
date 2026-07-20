@@ -134,11 +134,7 @@ Context::~Context() {
   env->DeleteGlobalRef(interruptHandlerClass);
   env->DeleteGlobalRef(quickJsExceptionClass);
   env->DeleteGlobalRef(stringUtf8);
-  if (rdmaBridgeInstance != nullptr) {
-    env->DeleteGlobalRef(rdmaBridgeInstance);
-  }
-  env->DeleteGlobalRef(rdmaBridgeClass);
-  env->DeleteGlobalRef(arrayListClass);
+  deleteBridgeRefs(env);
   env->DeleteGlobalRef(stringClass);
   env->DeleteGlobalRef(objectClass);
   env->DeleteGlobalRef(doubleClass);
@@ -605,6 +601,14 @@ void Context::cacheRdmaBridgeMethods(JNIEnv* env) {
       "(Ljava/util/List;)V");
 
   pendingChanges.reserve(BATCH_SIZE);
+}
+
+void Context::deleteBridgeRefs(JNIEnv* env) {
+  if (rdmaBridgeClass != nullptr) {
+    env->DeleteGlobalRef(rdmaBridgeClass);
+    env->DeleteGlobalRef(rdmaBridgeInstance);
+    env->DeleteGlobalRef(arrayListClass);
+  }
 }
 
 static int readIntProp(JSContext* ctx, JSValueConst obj, const char* name) {

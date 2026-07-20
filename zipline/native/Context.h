@@ -105,7 +105,7 @@ public:
   std::unordered_map<std::string, jclass> globalReferences;
 
   // JNI cache for RdmaBridge (static factories)
-  jclass rdmaBridgeClass;
+  jclass rdmaBridgeClass = nullptr;
   jmethodID rdmaBridgeCreateCreate;
   jmethodID rdmaBridgeCreateAdd;
   jmethodID rdmaBridgeCreateRemove;
@@ -132,7 +132,6 @@ public:
   jmethodID rdmaBridgeSendChanges;
   jmethodID rdmaBridgeSendBatch;
 
-  jobject changesList;
   std::vector<RdmaChange> pendingChanges;
   jobject jsValueToJsonElement(JNIEnv* env, JSValueConst val);
   jobject jsArrayToJsonElement(JNIEnv* env, JSValueConst val);
@@ -140,6 +139,7 @@ public:
   void flushPendingBatch(JNIEnv* env, int count);
   void finishFlushPending(JNIEnv* env);
   void cacheRdmaBridgeMethods(JNIEnv* env);
+  void deleteBridgeRefs(JNIEnv* env);
   void initRdmaChangesChannel(JNIEnv* env);
 };
 
