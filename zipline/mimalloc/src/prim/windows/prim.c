@@ -635,10 +635,10 @@ void _mi_prim_out_stderr( const char* msg )
 // reliably even when this is invoked before the C runtime is initialized.
 // i.e. when `_mi_preloading() == true`.
 // Note: on windows, environment names are not case sensitive.
-bool _mi_prim_getenv(const char* name, char* result, size_t result_size) {
+int _mi_prim_getenv(const char* name, char* result, size_t result_size) {
   result[0] = 0;
-  size_t len = GetEnvironmentVariableA(name, result, (DWORD)result_size);
-  return (len > 0 && len < result_size);
+  const size_t len = GetEnvironmentVariableA(name, result, (DWORD)result_size);
+  return (len < result_size ? (len > 0 ? 1 /* success */ : 0 /* not found */) : -1 /* error */);
 }
 
 
