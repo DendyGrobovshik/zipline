@@ -64,7 +64,7 @@ void _mi_strlcat(char* dest, const char* src, size_t dest_size) {
 size_t _mi_strnlen(const char* s, size_t max_len) {
   if (s==NULL) return 0;
   size_t len = 0;
-  while(s[len] != 0 && len < max_len) { len++; }
+  while(len < max_len && s[len] != 0) { len++; }
   return len;
 }
 
@@ -76,7 +76,7 @@ char* _mi_strnstr(char* s, size_t max_len, const char* pat) {
   if (s==NULL) return NULL;
   if (pat==NULL) return s;
   const size_t m = _mi_strnlen(s, max_len);
-  const size_t n = _mi_strlen(pat);
+  const size_t n = _mi_strlen(pat);  
   for (size_t start = 0; start + n <= m; start++) {
     size_t i = 0;
     while (i<n && pat[i]==s[start+i]) {
@@ -88,16 +88,18 @@ char* _mi_strnstr(char* s, size_t max_len, const char* pat) {
 }
 
 #ifdef MI_NO_GETENV
-bool _mi_getenv(const char* name, char* result, size_t result_size) {
+int _mi_getenv(const char* name, char* result, size_t result_size) {
   MI_UNUSED(name);
   MI_UNUSED(result);
   MI_UNUSED(result_size);
-  return false;
+  return ENOENT;
 }
 #else
-bool _mi_getenv(const char* name, char* result, size_t result_size) {
+int _mi_getenv(const char* name, char* result, size_t result_size) {
   if (name==NULL || result == NULL || result_size < 64) return false;
-  return _mi_prim_getenv(name,result,result_size);
+  // change the result of _mi_prim_getenv to an errno result
+  const int res = _mi_prim_getenv(name,result,result_size);
+  return (res > 0 ? 0 : (res == 0 ? ENOENT : EAGAIN));
 }
 #endif
 

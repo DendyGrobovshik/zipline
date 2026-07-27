@@ -112,10 +112,10 @@ size_t _mi_bin_size(size_t bin) {
 
 // Good size for allocation
 mi_decl_nodiscard mi_decl_export size_t mi_good_size(size_t size) mi_attr_noexcept {
-  if (size <= MI_LARGE_MAX_OBJ_SIZE) {
+  if (size <= MI_LARGE_MAX_OBJ_SIZE - MI_PADDING_SIZE) {
     return _mi_bin_size(mi_bin(size + MI_PADDING_SIZE));
   }
-  else if (size <= MI_MAX_ALLOC_SIZE) {
+  else if (size <= MI_MAX_ALLOC_SIZE - MI_PADDING_SIZE) {
     return _mi_align_up(size + MI_PADDING_SIZE,_mi_os_page_size());
   }
   else {
@@ -226,7 +226,7 @@ static inline void mi_theap_queue_first_update(mi_theap_t* theap, const mi_page_
   }
   else {
     // find previous size; due to minimal alignment upto 3 previous bins may need to be skipped
-    mi_assert_internal(pq > &theap->pages[0]); // since idx > 1
+    mi_assert_internal(pq > &theap->pages[0]); // since idx > 1    
     size_t bin = mi_bin(size);
     const mi_page_queue_t* prev = pq - 1;
     while( bin == mi_bin(prev->block_size) && prev > &theap->pages[0]) {

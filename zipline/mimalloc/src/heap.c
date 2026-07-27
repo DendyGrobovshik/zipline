@@ -61,14 +61,14 @@ static mi_decl_noinline mi_theap_t* mi_heap_init_theap(const mi_heap_t* const_he
     if (!_mi_thread_local_set(heap->theap, (mi_theap_t*)1)) {
       _mi_error_message(EFAULT, "unable to allocate memory for thread local storage\n");
       return NULL;
-    }
+    }    
     // then allocate the theap
     theap = _mi_theap_create(heap, _mi_theap_default_safe()->tld);
+    _mi_thread_local_set(heap->theap, theap);  // Cannot fail now as it was set before. Always set so the local is valid or NULL (and not 1)
     if (theap==NULL) {
       _mi_error_message(EFAULT, "unable to allocate memory for a thread local heap\n");
       return NULL;
-    }
-    _mi_thread_local_set(heap->theap, theap); // this cannot fail now as it was set before to a non-zero value
+    }    
   }
   return theap;
 }
@@ -77,7 +77,7 @@ static mi_decl_noinline mi_theap_t* mi_heap_init_theap(const mi_heap_t* const_he
 // get the theap for a heap without initializing (and return NULL in that case)
 mi_theap_t* _mi_heap_theap_get_peek(const mi_heap_t* heap) {
   if (heap==NULL || _mi_is_heap_main(heap)) {
-    return _mi_theap_main_safe();
+    return _mi_theap_main_safe(); 
   }
   else {
     return (mi_theap_t*)_mi_thread_local_get(heap->theap);
@@ -118,7 +118,7 @@ mi_heap_t* mi_heap_new_in_arena(mi_arena_id_t exclusive_arena_id) {
   heap->heap_seq = mi_atomic_increment_relaxed(&heap_main->subproc->heap_total_count);
   heap->exclusive_arena = _mi_arena_from_id(exclusive_arena_id);
   heap->numa_node = -1; // no initial affinity
-
+  mi_stats_header_init(&heap->stats);
   mi_lock_init(&heap->theaps_lock);
   mi_lock_init(&heap->os_abandoned_pages_lock);
   mi_lock_init(&heap->arena_pages_lock);
@@ -142,31 +142,31 @@ mi_heap_t* mi_heap_new(void) {
 
 // free all theaps belonging to this heap (without deleting their pages as we do this arena wise for efficiency)
 static void mi_heap_free_theaps(mi_heap_t* heap) {
-  // This can run concurrently with a thread that terminates (see `init.c:mi_thread_theaps_done`),
+  // This can run concurrently with a thread that terminates (see `init.c:mi_thread_theaps_done`), 
   // and we need to ensure we free theaps atomically.
-  // We do this in a loop where we release the theaps_lock at every potential re-iteration to unblock
+  // We do this in a loop where we release the theaps_lock at every potential re-iteration to unblock 
   // potential concurrent thread termination which tries to remove the theap from our theaps list.
   bool all_freed;
   do {
     all_freed = true;
     mi_theap_t* theap = NULL;
-    mi_lock(&heap->theaps_lock) {
-      theap = heap->theaps;
+    mi_lock(&heap->theaps_lock) { 
+      theap = heap->theaps; 
       while(theap != NULL) {
         mi_theap_t* next = theap->hnext;
         if (!_mi_theap_free(theap, false /* dont re-acquire the heap->theaps_lock */, true /* acquire the tld->theaps_lock though */ )) {
           all_freed = false;
         }
         theap = next;
-      }
+      }      
     }
-    if (!all_freed) {
-      mi_heap_stat_counter_increase(heap,heaps_delete_wait,1);
+    if (!all_freed) { 
+      mi_heap_stat_counter_increase(heap,heaps_delete_wait,1); 
       _mi_prim_thread_yield();
     }
-    else {
-      mi_assert_internal(heap->theaps==NULL);
-    }
+    else { 
+      mi_assert_internal(heap->theaps==NULL); 
+    }               
   }
   while(!all_freed);
 }
@@ -257,7 +257,7 @@ bool mi_unsafe_heap_page_is_under_utilized(mi_heap_t* heap, void* p, size_t perc
   if (p==NULL) return false;
   const mi_page_t* const page = _mi_safe_ptr_page(p);   // Get the page containing this pointer
   if (page==NULL || page->used==page->capacity || page->capacity < page->reserved) return false;
-  // If the page is the head of the queue, it is currently being used for
+  // If the page is the head of the queue, it is currently being used for 
   // allocations; we skip it to avoid immediate thrashing.
   if (page->prev == NULL)  return false;
 
@@ -265,7 +265,7 @@ bool mi_unsafe_heap_page_is_under_utilized(mi_heap_t* heap, void* p, size_t perc
   const mi_heap_t* const page_heap = mi_page_heap(page);
   if (page_heap==NULL) return false;
   if (heap!=NULL && page_heap!=heap) return false;
-
+    
   // check utilization
   if (page->capacity==0)   return false;
   if (perc_threshold>=100) return true;
