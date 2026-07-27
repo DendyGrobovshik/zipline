@@ -12,6 +12,9 @@ terms of the MIT license. A copy of the license can be found in the file
 #include "mimalloc/atomic.h"
 #include "mimalloc/prim.h"
 
+#include <sched.h>   // sched_yield
+#include <unistd.h>  // getentropy
+
 // Design
 // ======
 //
@@ -182,12 +185,12 @@ void _mi_prim_out_stderr( const char* msg) {
 // Environment
 //----------------------------------------------------------------
 
-bool _mi_prim_getenv(const char* name, char* result, size_t result_size) {
+int _mi_prim_getenv(const char* name, char* result, size_t result_size) {
   // For code size reasons, do not support environ customization for now.
   MI_UNUSED(name);
   MI_UNUSED(result);
   MI_UNUSED(result_size);
-  return false;
+  return 0; // not found
 }
 
 
@@ -223,7 +226,9 @@ void _mi_prim_thread_init_auto_done(void) {
 }
 
 void _mi_prim_thread_done_auto_done(void) {
-  // nothing to do
+  if (_mi_heap_default_key != (pthread_key_t)(-1)) {  // do not leak the key, see issue #809
+    pthread_key_delete(_mi_heap_default_key);
+  }
 }
 
 void _mi_prim_thread_associate_default_theap(mi_theap_t* theap) {
@@ -251,8 +256,6 @@ bool _mi_prim_thread_is_in_threadpool(void) {
   return false;
 }
 
-#include <emscripten.h>
-
 void _mi_prim_thread_yield(void) {
-  emscripten_sleep(0);
+  sched_yield();
 }

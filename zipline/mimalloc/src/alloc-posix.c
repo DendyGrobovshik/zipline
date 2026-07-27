@@ -33,12 +33,12 @@ terms of the MIT license. A copy of the license can be found in the file
 
 
 mi_decl_nodiscard size_t mi_malloc_size(const void* p) mi_attr_noexcept {
-  // if (!mi_is_in_heap_region(p)) return 0;
+  if (!mi_is_in_heap_region(p)) return 0;
   return mi_usable_size(p);
 }
 
 mi_decl_nodiscard size_t mi_malloc_usable_size(const void *p) mi_attr_noexcept {
-  // if (!mi_is_in_heap_region(p)) return 0;
+  if (!mi_is_in_heap_region(p)) return 0;
   return mi_usable_size(p);
 }
 
@@ -52,7 +52,7 @@ void mi_cfree(void* p) mi_attr_noexcept {
   }
 }
 
-int mi_posix_memalign(void** p, size_t alignment, size_t size) mi_attr_noexcept {
+int mi_posix_memalign(void** p, size_t alignment, size_t size) {  // mi_attr_noexcept (issue #794)
   // Note: The spec dictates we should not modify `*p` on an error. (issue#27)
   // <http://man7.org/linux/man-pages/man3/posix_memalign.3.html>
   if (p == NULL) return EINVAL;
@@ -61,14 +61,14 @@ int mi_posix_memalign(void** p, size_t alignment, size_t size) mi_attr_noexcept 
   if (alignment==0 || !_mi_is_power_of_two(alignment)) return EINVAL;  // not a power of 2
   void* q = mi_malloc_aligned(size, alignment);
   if (q==NULL && size != 0) return ENOMEM;
-  mi_assert_internal(((uintptr_t)q % alignment) == 0);
+  mi_assert_internal(_mi_is_aligned(q,alignment));
   *p = q;
   return 0;
 }
 
 mi_decl_nodiscard mi_decl_restrict void* mi_memalign(size_t alignment, size_t size) mi_attr_noexcept {
   void* p = mi_malloc_aligned(size, alignment);
-  mi_assert_internal(((uintptr_t)p % alignment) == 0);
+  mi_assert_internal(_mi_is_aligned(p,alignment));
   return p;
 }
 
@@ -95,7 +95,7 @@ mi_decl_nodiscard mi_decl_restrict void* mi_aligned_alloc(size_t alignment, size
   */
   // C11 also requires alignment to be a power-of-two (and > 0) which is checked in mi_malloc_aligned
   void* p = mi_malloc_aligned(size, alignment);
-  mi_assert_internal(((uintptr_t)p % alignment) == 0);
+  mi_assert_internal(_mi_is_aligned(p,alignment));
   return p;
 }
 
@@ -144,7 +144,7 @@ mi_decl_nodiscard mi_decl_restrict wchar_t* mi_wcsdup(const wchar_t* s) mi_attr_
   if (s==NULL) return NULL;
   size_t wlen;
   for(wlen = 0; s[wlen] != 0 && wlen < PTRDIFF_MAX; wlen++) { }  // prevent overflow on wlen+1
-  size_t size;
+  size_t size; 
   if (mi_mul_overflow(wlen+1, sizeof(wchar_t), &size) || size > PTRDIFF_MAX) return NULL;
   wchar_t* p = (wchar_t*)mi_malloc(size);
   if (p != NULL) {
@@ -174,7 +174,7 @@ int mi_dupenv_s(char** buf, size_t* size, const char* name) mi_attr_noexcept {
 
 int mi_wdupenv_s(wchar_t** buf, size_t* size, const wchar_t* name) mi_attr_noexcept {
   if (size != NULL) *size = 0;
-  if (buf==NULL || name==NULL) return EINVAL;
+  if (buf==NULL || name==NULL) return EINVAL;  
 #if !defined(_WIN32) || (defined(WINAPI_FAMILY) && (WINAPI_FAMILY != WINAPI_FAMILY_DESKTOP_APP))
   // not supported
   *buf = NULL;

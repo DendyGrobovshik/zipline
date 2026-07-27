@@ -287,7 +287,7 @@ bool _mi_page_map_init(void) {
   }
   mi_atomic_store_ptr_release(mi_page_t*, &_mi_page_map[0], sub0);
   mi_lock_init(&mi_page_map_lock);             // initialize late in case the lock init causes allocation
-
+  
   mi_assert_internal(_mi_ptr_page(NULL)==NULL);
   return true;
 }
@@ -297,7 +297,7 @@ void _mi_page_map_unsafe_destroy(mi_subproc_t* subproc) {
   mi_assert_internal(subproc != NULL);
   mi_assert_internal(_mi_page_map != NULL);
   if (_mi_page_map == NULL) return;
-  mi_lock_done(&mi_page_map_lock);
+  mi_lock_done(&mi_page_map_lock);  
   for (size_t idx = 1; idx < mi_page_map_count; idx++) {  // skip entry 0 (as we allocate that submap at the end of the page_map)
     // free all sub-maps
     if (mi_page_map_is_committed(idx, NULL)) {
@@ -326,16 +326,16 @@ mi_decl_nodiscard static bool mi_page_map_ensure_submap_at(size_t idx, mi_submap
   }
   if mi_unlikely(sub == NULL) {
     // sub map not yet allocated, alloc now
-    mi_lock(&mi_page_map_lock)
+    mi_lock(&mi_page_map_lock) 
     {
       sub = mi_atomic_load_ptr_acquire(mi_page_t*, &_mi_page_map[idx]); // reload
-      if (sub==NULL) // not yet allocated by another thread?
+      if (sub==NULL) // not yet allocated by another thread?      
       {
         mi_memid_t memid;
         const size_t submap_size = MI_PAGE_MAP_SUB_SIZE;
-        sub = (mi_submap_t)_mi_os_zalloc(submap_size, &memid);
+        sub = (mi_submap_t)_mi_os_zalloc(submap_size, &memid);        
         if (sub==NULL) {
-          _mi_warning_message("internal error: unable to extend the page map\n");
+          _mi_warning_message("internal error: unable to extend the page map\n");          
         }
         else {
           mi_submap_t expect = NULL;
@@ -411,6 +411,7 @@ void _mi_page_map_unregister(mi_page_t* page) {
   mi_assert_internal(_mi_page_map != NULL);
   mi_assert_internal(page != NULL);
   mi_assert_internal(_mi_is_aligned(mi_page_slice_start(page), MI_PAGE_ALIGN));
+  // note: should proceed even if the page was not registered yet (for failure paths in page allocation in `arena.c`)
   if mi_unlikely(_mi_page_map == NULL) return;
   // get index and count
   size_t slice_count;

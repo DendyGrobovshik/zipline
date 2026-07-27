@@ -120,7 +120,7 @@ static inline void mi_bfield_atomic_clear_once_set(_Atomic(mi_bfield_t)*b, size_
         mi_subproc_stat_counter_increase(_mi_subproc(), pages_unabandon_busy_wait, 1);
       }
       while ((old&mask)==0) { // busy wait
-        _mi_prim_thread_yield();
+        _mi_prim_thread_yield(); 
         old = mi_atomic_load_acquire(b);
       }
     }
@@ -683,7 +683,7 @@ static inline bool mi_bchunk_try_find_and_clear(mi_bchunk_t* chunk, size_t* pidx
     if (mi_bchunk_try_find_and_clear_at(chunk, i, pidx)) return true;
   }
   #endif
-  return false;
+  return false;  
 }
 
 static inline bool mi_bchunk_try_find_and_clear_1(mi_bchunk_t* chunk, size_t n, size_t* pidx) {
@@ -1303,7 +1303,7 @@ static inline bool mi_bitmap_find(mi_bitmap_t* bitmap, size_t tseq, size_t n, si
 -------------------------------------------------------------------------------- */
 
 typedef struct mi_claim_fun_data_s {
-  mi_arena_t*   arena;
+  mi_arena_t*   arena;  
 } mi_claim_fun_data_t;
 
 static bool mi_bitmap_try_find_and_claim_visit(mi_bitmap_t* bitmap, size_t chunk_idx, size_t n, size_t* pidx, void* arg1, void* arg2)
@@ -1355,12 +1355,15 @@ bool mi_bitmap_bsr(mi_bitmap_t* bitmap, size_t* idx) {
     mi_bfield_t cmap = mi_atomic_load_relaxed(&bitmap->chunkmap.bfields[i]);
     size_t cmap_idx;
     if (mi_bsr(cmap,&cmap_idx)) {
-      // highest chunk
-      const size_t chunk_idx = i*MI_BFIELD_BITS + cmap_idx;
-      size_t cidx;
-      if (mi_bchunk_bsr(&bitmap->chunks[chunk_idx], &cidx)) {
-        *idx = (chunk_idx * MI_BCHUNK_BITS) + cidx;
-        return true;
+      // from highest chunk to lowest (scan all in case the cmap entry was stale)
+      for (size_t j = cmap_idx+1; j>0; ) {
+        j--;
+        const size_t chunk_idx = (i*MI_BFIELD_BITS) + j;
+        size_t cidx;
+        if (mi_bchunk_bsr(&bitmap->chunks[chunk_idx], &cidx)) {
+          *idx = (chunk_idx * MI_BCHUNK_BITS) + cidx;
+          return true;
+        }
       }
     }
   }
@@ -1479,13 +1482,13 @@ bool _mi_bitmap_forall_setc_ranges(mi_bitmap_t* bitmap, mi_forall_set_fun_t* vis
 // However, the `rngslices` are capped at `MI_BFIELD_BITS` at most.
 // Used by purging to purge larger ranges when possible. With transparent huge pages we only
 // want to purge whole huge pages (2 MiB) at a time which is what the `rngslices` parameter achieves.
-bool _mi_bitmap_forall_setc_rangesn(mi_bitmap_t* bitmap, size_t rngslices, mi_forall_set_fun_t* visit, mi_arena_t* arena, void* arg)
+bool _mi_bitmap_forall_setc_rangesn(mi_bitmap_t* bitmap, size_t rngslices, mi_forall_set_fun_t* visit, mi_arena_t* arena, void* arg) 
 {
   // use the generic routine for `rngslices<=1` (as that one finds longest ranges at a time)
   if (rngslices<=1) {
     return _mi_bitmap_forall_setc_ranges(bitmap, visit, arena, arg);
   }
-  // mi_assert_internal(rngslices <= MI_BFIELD_BITS);
+  // mi_assert_internal(rngslices <= MI_BFIELD_BITS);  
   if (rngslices > MI_BFIELD_BITS) { rngslices = MI_BFIELD_BITS;  } // cap at MI_BFIELD_BITS at most
 
   // for all chunkmap entries
@@ -1521,9 +1524,9 @@ bool _mi_bitmap_forall_setc_rangesn(mi_bitmap_t* bitmap, size_t rngslices, mi_fo
           }
           else {
             skipped = skipped | (b & rngmask);
-          }
-        }
-
+          }          
+        } 
+        
         if (skipped != 0) {
           mi_atomic_or_relaxed(&chunk->bfields[j], skipped);
         }
@@ -1572,27 +1575,15 @@ void mi_bbitmap_unsafe_setN(mi_bbitmap_t* bbitmap, size_t idx, size_t n) {
 }
 
 bool mi_bbitmap_bsr_inv(mi_bbitmap_t* bbitmap, size_t* idx) {
+  // scan for highest zero bit in the bitmap
+  // note: we cannot use the chunkmap since that only conservatively denotes if there might be a set bit in a chuck
   const size_t chunk_count = mi_bbitmap_chunk_count(bbitmap);
-  const size_t chunkmap_max = _mi_divide_up(chunk_count, MI_BFIELD_BITS);
-  size_t skip_at_top = chunk_count % MI_BFIELD_BITS;
-  for (size_t i = chunkmap_max; i > 0; ) {
+  for(size_t i = chunk_count; i > 0; ) {
     i--;
-    mi_bfield_t cmap = mi_atomic_load_relaxed(&bbitmap->chunkmap.bfields[i]);
-    size_t cmap_idx;
-    // don't consider top 0 bits; set those to 1 here
-    if (skip_at_top > 0) {
-      const size_t mask_top = (~mi_bfield_zero()) << (MI_BFIELD_BITS - skip_at_top);
-      skip_at_top = 0;   // only for the first iteration
-      cmap |= mask_top;
-    }
-    if (mi_bsr(~cmap, &cmap_idx)) {
-      // highest chunk
-      const size_t chunk_idx = i*MI_BFIELD_BITS + cmap_idx;
-      size_t cidx;
-      if (mi_bchunk_bsr_inv(&bbitmap->chunks[chunk_idx], &cidx)) {
-        *idx = (chunk_idx * MI_BCHUNK_BITS) + cidx;
-        return true;
-      }
+    size_t cidx;
+    if (mi_bchunk_bsr_inv(&bbitmap->chunks[i], &cidx)) {
+      *idx = (i * MI_BCHUNK_BITS) + cidx;
+      return true;
     }
   }
   return false;

@@ -153,7 +153,7 @@ static void* alloc_items(size_t items, random_t r) {
   }
   if (items>=32 && items<=40) items*=2;              // pthreads uses 320b allocations (this shows that more clearly in the stats)
   if (use_one_size > 0) items = (use_one_size / sizeof(uintptr_t));
-  if (items==0) items = 1;
+  if (items==0) items = 1;  
   uintptr_t* p = (uintptr_t*)custom_calloc(items,sizeof(uintptr_t));
   if (p != NULL) {
     for (uintptr_t i = 0; i < items; i++) {
@@ -259,7 +259,7 @@ static void test_stress(void) {
   #endif
   uintptr_t r = rand();
   for (int n = 0; n < ITER; n++) {
-
+    
     #ifdef MI_USE_HEAPS
     // new heap for each iteration
     if (prev_heaps[MI_USE_HEAPS-1] != NULL) {
@@ -270,7 +270,7 @@ static void test_stress(void) {
     }
     prev_heaps[0] = current_heap;
     current_heap = mi_heap_new();
-    #endif
+    #endif  
 
     run_os_threads(THREADS, &stress);
 
@@ -290,7 +290,7 @@ static void test_stress(void) {
         free_items(p);
       }
     }
-
+    
     #if !defined(NDEBUG) || defined(MI_TSAN)
     if ((n + 1) % 10 == 0) {
       printf("- iterations left: %3d\n", ITER - (n + 1));
@@ -302,11 +302,11 @@ static void test_stress(void) {
     }
     #endif
   }
-
+  
   #ifndef USE_STD_MALLOC
   mi_stats_print(NULL);
   #endif
-
+  
   // clean up  (a bit too early to test the final free_items still works correctly)
   #ifdef MI_USE_HEAPS
   for (int i = 0; i < MI_USE_HEAPS; i++) {
@@ -361,7 +361,7 @@ int main(int argc, char** argv) {
   #endif
   #if !defined(NDEBUG) && !defined(USE_STD_MALLOC)
     mi_option_set(mi_option_arena_reserve, mi_arena_min_size()/1024 /* in KiB ! */);
-    mi_option_set(mi_option_purge_delay,1);
+    mi_option_set(mi_option_purge_delay,1);    
   #endif
   #if defined(NDEBUG) && !defined(USE_STD_MALLOC)
     // mi_option_set(mi_option_purge_delay,-1);
@@ -422,7 +422,7 @@ int main(int argc, char** argv) {
   //  fputs(json,stderr);
   //  mi_free(json);
   //}
-  #endif
+  #endif  
   mi_collect(true);
   mi_stats_print(NULL);
 #endif
