@@ -25,7 +25,6 @@
 #include "common/global-gc.h"
 #include "common/intset-builtins.h"
 #include "quickjs/quickjs.h"
-#include "mimalloc/mimalloc-quickjs.h"
 
 /**
  * This signature satisfies the JSInterruptHandler typedef. It is always installed but only does
@@ -77,7 +76,7 @@ struct JniThreadDetacher {
 
 Context::Context(JNIEnv* env)
     : jniVersion(env->GetVersion()),
-      jsRuntime(JS_NewRuntimeMimalloc()),
+      jsRuntime(JS_NewRuntime()),
       jsContext(JS_NewContextNoEval(jsRuntime)),
       jsContextForCompiling(JS_NewContext(jsRuntime)),
       outboundCallChannelClassId(0),

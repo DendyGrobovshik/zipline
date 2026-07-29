@@ -37,39 +37,11 @@ fn setupTarget(b: *std.Build, tag: std.Target.Os.Tag, arch: std.Target.Cpu.Arch,
       else => b.path("native/include/unix"),
     }
   );
-  lib.root_module.addIncludePath(b.path("mimalloc/include"));
 
   lib.root_module.link_libc = true;
 
-  // TODO Tree-walk these two dirs for all C files.
   lib.root_module.addCSourceFiles(.{
     .files = &.{
-      "mimalloc/src/alloc.c",
-      "mimalloc/src/alloc-aligned.c",
-      "mimalloc/src/alloc-posix.c",
-      "mimalloc/src/arena.c",
-      "mimalloc/src/arena-meta.c",
-      "mimalloc/src/bitmap.c",
-      "mimalloc/src/heap.c",
-      "mimalloc/src/init.c",
-      "mimalloc/src/libc.c",
-      "mimalloc/src/options.c",
-      "mimalloc/src/os.c",
-      "mimalloc/src/page.c",
-      "mimalloc/src/page-map.c",
-      "mimalloc/src/random.c",
-      "mimalloc/src/stats.c",
-      "mimalloc/src/theap.c",
-      "mimalloc/src/threadlocal.c",
-      "mimalloc/src/prim/prim.c",
-    },
-    .flags = &.{
-      "-Wno-date-time",
-    },
-  });
-  lib.root_module.addCSourceFiles(.{
-    .files = &.{
-      "native/mimalloc/mimalloc-quickjs.c",
       "native/common/context-no-eval.c",
       "native/common/finalization-registry.c",
       "native/common/global-gc.c",

@@ -56,7 +56,7 @@ import app.cash.zipline.quickjs.JS_NewClassID
 import app.cash.zipline.quickjs.JS_NewContext
 import app.cash.zipline.quickjs.JS_NewContextNoEval
 import app.cash.zipline.quickjs.JS_NewObjectClass
-import app.cash.zipline.quickjs.JS_NewRuntimeMimalloc
+import app.cash.zipline.quickjs.JS_NewRuntime
 import app.cash.zipline.quickjs.JS_NewString
 import app.cash.zipline.quickjs.JS_READ_OBJ_BYTECODE
 import app.cash.zipline.quickjs.JS_READ_OBJ_REFERENCE
@@ -143,7 +143,9 @@ actual class QuickJs private constructor(
 ) : AutoCloseable {
   actual companion object {
     actual fun create(): QuickJs {
-      val runtime = JS_NewRuntimeMimalloc() ?: throw OutOfMemoryError()
+      // Use the default system allocator (mimalloc was removed: its thread-exit
+      // heap teardown caused invalid frees at pthread TSD cleanup).
+      val runtime = JS_NewRuntime() ?: throw OutOfMemoryError()
       val context = JS_NewContextNoEval(runtime)
       if (context == null) {
         JS_FreeRuntime(runtime)
