@@ -22,11 +22,11 @@ import kotlinx.cinterop.CPointer
 import kotlinx.cinterop.CValues
 import kotlinx.cinterop.CVariable
 import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.UByteVar
 import kotlinx.cinterop.NativePlacement
 import kotlinx.cinterop.allocArray
 import kotlinx.cinterop.interpretCPointer
 import kotlinx.cinterop.sizeOf
-import kotlinx.cinterop.CFunction
 import kotlinx.cinterop.COpaquePointer
 import kotlinx.cinterop.CValue
 import kotlinx.cinterop.asStableRef
@@ -121,8 +121,8 @@ public fun bridgeForAny(ctx: CPointer<JSContext>, jsVal: CValue<JSValue>): Any? 
     if (JS_IsUndefined(dispatch) != 0) {
       null
     } else {
-      val fn = JsValueGetFloat64(dispatch).toRawBits().toCPointer<CFunction<(CPointer<JSContext>, CValue<JSValue>) -> COpaquePointer?>>()!!
-      val r = fn(ctx, jsVal)!!.asStableRef<Any>().get()
+      val fn = JsValueGetFloat64(dispatch).toRawBits().toCPointer<UByteVar>()!!.asStableRef<(CPointer<JSContext>, CValue<JSValue>) -> Any>()
+      val r = fn.get()(ctx, jsVal)
       JS_FreeValue(ctx, dispatch)
       r
     }

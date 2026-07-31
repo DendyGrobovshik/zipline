@@ -25,7 +25,6 @@ internal fun generateNativeBridgeRetainFile(outputDir: String, bridgeEntries: Li
     appendLine("package generated_bridges")
     appendLine()
     appendLine("import app.cash.zipline.registerBridge")
-    appendLine("import kotlinx.cinterop.staticCFunction")
     appendLine("import kotlin.native.CName")
     appendLine()
     appendLine("// Retain references to bridge functions to prevent dead-code elimination.")
@@ -40,7 +39,7 @@ internal fun generateNativeBridgeRetainFile(outputDir: String, bridgeEntries: Li
     appendLine("public fun $initFnName(): Unit {")
     appendLine("    _retain.hashCode()")
     for ((fqn, fnName) in bridgeEntries) {
-      appendLine("    registerBridge(\"$fqn\", staticCFunction(::$fnName))")
+      appendLine("    registerBridge(\"$fqn\", ::$fnName)")
     }
     appendLine("}")
   }
@@ -144,7 +143,7 @@ internal fun generateNativeBridgeFile(outputDir: String, clazz: IrClass) {
     appendLine("public fun $functionName(")
     appendLine("  ctx: CPointer<JSContext>,")
     appendLine("  jsVal: CValue<JSValue>,")
-    appendLine("): COpaquePointer? {")
+    appendLine("): Any {")
     // Generate field reads
     for (field in fields) {
       val propName = field.jsPropertyName
@@ -263,15 +262,15 @@ internal fun generateNativeBridgeFile(outputDir: String, clazz: IrClass) {
           if (field.isNullable) {
             appendLine("    val ${field.name} = if (JS_IsUndefined(${field.name}Ref) != 0 || JS_IsNull(${field.name}Ref) != 0) null else {")
             appendLine("        val dispatch = JS_GetPropertyStr(ctx, ${field.name}Ref, \"bridge_dispatch\")")
-            appendLine("        val dispatchFn = JsValueGetFloat64(dispatch).toRawBits().toCPointer<CFunction<(CPointer<JSContext>, CValue<JSValue>) -> COpaquePointer?>>()!!")
-            appendLine("        val result = dispatchFn(ctx, ${field.name}Ref)!!.asStableRef<Any>().get() as $castName")
+            appendLine("        val dispatchFn = JsValueGetFloat64(dispatch).toRawBits().toCPointer<UByteVar>()!!.asStableRef<(CPointer<JSContext>, CValue<JSValue>) -> Any>()")
+            appendLine("        val result = dispatchFn.get()(ctx, ${field.name}Ref) as $castName")
             appendLine("        JS_FreeValue(ctx, dispatch)")
             appendLine("        result")
             appendLine("    }")
           } else {
             appendLine("    val ${field.name}Dispatch = JS_GetPropertyStr(ctx, ${field.name}Ref, \"bridge_dispatch\")")
-            appendLine("    val ${field.name}DispatchFn = JsValueGetFloat64(${field.name}Dispatch).toRawBits().toCPointer<CFunction<(CPointer<JSContext>, CValue<JSValue>) -> COpaquePointer?>>()!!")
-            appendLine("    val ${field.name} = ${field.name}DispatchFn(ctx, ${field.name}Ref)!!.asStableRef<Any>().get() as $castName")
+            appendLine("    val ${field.name}DispatchFn = JsValueGetFloat64(${field.name}Dispatch).toRawBits().toCPointer<UByteVar>()!!.asStableRef<(CPointer<JSContext>, CValue<JSValue>) -> Any>()")
+            appendLine("    val ${field.name} = ${field.name}DispatchFn.get()(ctx, ${field.name}Ref) as $castName")
             appendLine("    JS_FreeValue(ctx, ${field.name}Dispatch)")
           }
           appendLine("    JS_FreeValue(ctx, ${field.name}Ref)")
@@ -366,7 +365,7 @@ internal fun generateNativeBridgeFile(outputDir: String, clazz: IrClass) {
     for (field in bodyFields) {
       appendLine("    _obj.${field.name} = ${field.name}")
     }
-    appendLine("    return StableRef.create(_obj).asCPointer()")
+    appendLine("    return _obj")
     appendLine("}")
   }
 

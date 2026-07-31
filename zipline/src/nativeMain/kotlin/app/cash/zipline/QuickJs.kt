@@ -146,10 +146,10 @@ fun registerBridgeInitHook(hook: () -> Unit) {
   bridgeRetainRefs.add(hook)
 }
 
-private val bridgeTable = mutableMapOf<String, CPointer<CFunction<(CPointer<JSContext>, CValue<JSValue>) -> COpaquePointer?>>>()
+private val bridgeTable = mutableMapOf<String, StableRef<(CPointer<JSContext>, CValue<JSValue>) -> Any>>()
 
-fun registerBridge(fqn: String, fn: CPointer<CFunction<(CPointer<JSContext>, CValue<JSValue>) -> COpaquePointer?>>) {
-  bridgeTable[fqn] = fn
+fun registerBridge(fqn: String, fn: (CPointer<JSContext>, CValue<JSValue>) -> Any) {
+  bridgeTable[fqn] = StableRef.create(fn)
 }
 
 @EngineApi
@@ -669,8 +669,8 @@ actual class QuickJs private constructor(
       throw NullPointerException("bridge_dispatch not set on JS object, constructor: $name")
     }
     val dispatchFn = JsValueGetFloat64(bridgeDispatchVal).toRawBits()
-      .toCPointer<CFunction<(CPointer<JSContext>, CValue<JSValue>) -> COpaquePointer?>>()!!
-    val kToWrap = dispatchFn(context, jsToWrap)!!.asStableRef<Any>().get()
+      .toCPointer<UByteVar>()!!.asStableRef<(CPointer<JSContext>, CValue<JSValue>) -> Any>()
+    val kToWrap = dispatchFn.get()(context, jsToWrap)
     rdmaChangeSink!!.createBridgeChange(id, kToWrap)
     JS_FreeValue(context, bridgeDispatchVal)
     return JsUndefined()
@@ -698,7 +698,7 @@ actual class QuickJs private constructor(
     }
 
     val proto = JS_GetPropertyStr(context, ctor, "prototype")
-    val bits = dispatchFn.rawValue.toLong()
+    val bits = dispatchFn.asCPointer().rawValue.toLong()
     JS_SetPropertyStr(context, proto, "bridge_dispatch",
       JsNewFloat64(Double.fromBits(bits)))
     JS_FreeValue(context, proto)
