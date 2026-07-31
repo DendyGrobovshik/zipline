@@ -57,6 +57,7 @@ internal fun generateBridgeFile(outputDir: String, annotatedClass: IrClass) {
 
   val nullablePrimitiveFields = fields.filter { it.isNullable && isKnownType(it.ktType) && isJniPrimitive(it.ktType) }
   val hasAnyField = fields.any { it.ktType == "kotlin.Any" }
+  val hasCollectionField = fields.any { it.ktType in kotlinToJvmClass }
   val isObject = annotatedClass.kind == ClassKind.OBJECT
   val isCompanion = isObject && annotatedClass.isCompanion
   val constructorSig = if (isObject || constructorFields.isEmpty()) "()V"
@@ -100,7 +101,7 @@ internal fun generateBridgeFile(outputDir: String, annotatedClass: IrClass) {
     for (f in bodyFields) {
       appendLine("static jfieldID _fld_${f.name} = NULL;")
     }
-    if (hasAnyField) {
+    if (hasAnyField || hasCollectionField) {
       appendLine("// Boxed type refs for Any? value dispatch")
       appendLine("static jclass _any_boxed_Integer_cls = NULL;")
       appendLine("static jmethodID _any_boxed_Integer_ctor = NULL;")
@@ -151,7 +152,7 @@ internal fun generateBridgeFile(outputDir: String, annotatedClass: IrClass) {
       appendLine("        _boxedCtor_${f.name} = (*env)->GetMethodID(env, _boxed_${f.name}, \"<init>\", \"${info.ctorSig}\");")
       appendLine("    }")
     }
-    if (hasAnyField) {
+    if (hasAnyField || hasCollectionField) {
       appendLine("    // Init boxed type refs for Any? value dispatch")
       appendLine("    if (_any_boxed_Integer_cls == NULL) {")
       appendLine("        jclass intLocal = (*env)->FindClass(env, \"java/lang/Integer\");")
@@ -712,19 +713,88 @@ internal fun emitCollectionExtraction(
   field: FieldInfo,
 ) {
   val javaVar = "java_${field.name}"
-  // For now, create an empty ArrayList for JS arrays.
-  // Full element conversion requires per-element dispatch which is tracked separately.
-  sb.appendLine("        // Collection field — check if JS array, create empty ArrayList")
-  sb.appendLine("        if (JS_IsArray(ctx, js_${field.name})) {")
+  val elemNullable = field.arrayElementNullable
+  sb.appendLine("        // Collection field — unwrap Kotlin/JS ArrayList wrapper, then copy elements.")
+  sb.appendLine("        JSValue colArr_${field.name} = js_${field.name};")
+  sb.appendLine("        {")
+  sb.appendLine("            JSValue _wrapCheck = JS_GetPropertyStr(ctx, js_${field.name}, \"array_1\");")
+  sb.appendLine("            if (!JS_IsUndefined(_wrapCheck)) {")
+  sb.appendLine("                JS_FreeValue(ctx, js_${field.name});")
+  sb.appendLine("                colArr_${field.name} = _wrapCheck;")
+  sb.appendLine("            }")
+  sb.appendLine("        }")
+  sb.appendLine("        if (JS_IsArray(ctx, colArr_${field.name})) {")
+  sb.appendLine("            // Look up boxed primitive classes for per-element dispatch")
+  for ((ktType, info) in boxedPrimitiveInfo) {
+    val shortName = ktType.substringAfterLast('.')
+    sb.appendLine("            jclass cls_col_${field.name}_${shortName} = (*env)->FindClass(env, \"${info.wrapperClass}\");")
+    sb.appendLine("            jmethodID ctor_col_${field.name}_${shortName} = (*env)->GetMethodID(env, cls_col_${field.name}_${shortName}, \"<init>\", \"${info.ctorSig}\");")
+  }
+  sb.appendLine()
   sb.appendLine("            jclass alc = (*env)->FindClass(env, \"java/util/ArrayList\");")
   sb.appendLine("            jmethodID alc_init = (*env)->GetMethodID(env, alc, \"<init>\", \"()V\");")
   sb.appendLine("            $javaVar = (*env)->NewObject(env, alc, alc_init);")
+  sb.appendLine("            jmethodID alc_add = (*env)->GetMethodID(env, alc, \"add\", \"(Ljava/lang/Object;)Z\");")
+  sb.appendLine("            jint _coll_len = 0;")
+  sb.appendLine("            {")
+  sb.appendLine("                JSValue _coll_len_val = JS_GetPropertyStr(ctx, colArr_${field.name}, \"length\");")
+  sb.appendLine("                _coll_len = JS_VALUE_GET_INT(_coll_len_val);")
+  sb.appendLine("                JS_FreeValue(ctx, _coll_len_val);")
+  sb.appendLine("            }")
+  sb.appendLine("            for (jint _ci = 0; _ci < _coll_len; _ci++) {")
+  sb.appendLine("                JSValue _celem = JS_GetPropertyUint32(ctx, colArr_${field.name}, _ci);")
+  if (elemNullable) {
+    sb.appendLine("                if (JS_IsUndefined(_celem) || JS_IsNull(_celem)) {")
+    sb.appendLine("                    (*env)->CallBooleanMethod(env, $javaVar, alc_add, NULL);")
+    sb.appendLine("                    JS_FreeValue(ctx, _celem);")
+    sb.appendLine("                    continue;")
+    sb.appendLine("                }")
+  }
+  sb.appendLine("                int _celem_tag = JS_VALUE_GET_NORM_TAG(_celem);")
+  sb.appendLine("                jobject _celem_obj = NULL;")
+  sb.appendLine("                switch (_celem_tag) {")
+  sb.appendLine("                    case JS_TAG_INT: {")
+  sb.appendLine("                        _celem_obj = (*env)->NewObject(env, cls_col_${field.name}_Int, ctor_col_${field.name}_Int, (jint)JS_VALUE_GET_INT(_celem));")
+  sb.appendLine("                        break;")
+  sb.appendLine("                    }")
+  sb.appendLine("                    case JS_TAG_FLOAT64: {")
+  sb.appendLine("                        _celem_obj = (*env)->NewObject(env, cls_col_${field.name}_Double, ctor_col_${field.name}_Double, JS_VALUE_GET_FLOAT64(_celem));")
+  sb.appendLine("                        break;")
+  sb.appendLine("                    }")
+  sb.appendLine("                    case JS_TAG_BOOL: {")
+  sb.appendLine("                        _celem_obj = (*env)->NewObject(env, cls_col_${field.name}_Boolean, ctor_col_${field.name}_Boolean, (jboolean)JS_VALUE_GET_BOOL(_celem));")
+  sb.appendLine("                        break;")
+  sb.appendLine("                    }")
+  sb.appendLine("                    case JS_TAG_STRING: {")
+  sb.appendLine("                        const char *_cstr = JS_ToCString(ctx, _celem);")
+  sb.appendLine("                        if (_cstr != NULL) {")
+  sb.appendLine("                            _celem_obj = (*env)->NewStringUTF(env, _cstr);")
+  sb.appendLine("                            JS_FreeCString(ctx, _cstr);")
+  sb.appendLine("                        }")
+  sb.appendLine("                        break;")
+  sb.appendLine("                    }")
+  sb.appendLine("                    case JS_TAG_OBJECT: {")
+  sb.appendLine("                        JSValue _cedisp = JS_GetPropertyStr(ctx, _celem, \"bridge_dispatch\");")
+  sb.appendLine("                        if (!JS_IsUndefined(_cedisp)) {")
+  sb.appendLine("                            JniBridgeDispatch *_cedp = (JniBridgeDispatch *)(intptr_t)JS_VALUE_GET_FLOAT64(_cedisp);")
+  sb.appendLine("                            _celem_obj = _cedp->toJavaObject(env, ctx, &_celem);")
+  sb.appendLine("                            JS_FreeValue(ctx, _cedisp);")
+  sb.appendLine("                        }")
+  sb.appendLine("                        break;")
+  sb.appendLine("                    }")
+  sb.appendLine("                    default:")
+  sb.appendLine("                        break;")
+  sb.appendLine("                }")
+  sb.appendLine("                (*env)->CallBooleanMethod(env, $javaVar, alc_add, _celem_obj);")
+  sb.appendLine("                if (_celem_obj != NULL) (*env)->DeleteLocalRef(env, _celem_obj);")
+  sb.appendLine("                JS_FreeValue(ctx, _celem);")
+  sb.appendLine("            }")
   sb.appendLine("        } else {")
-  sb.appendLine("            // Unexpected: try bridge_dispatch as fallback")
-  sb.appendLine("            JSValue coldisp_${field.name} = JS_GetPropertyStr(ctx, js_${field.name}, \"bridge_dispatch\");")
+  sb.appendLine("            // Try bridge_dispatch as fallback")
+  sb.appendLine("            JSValue coldisp_${field.name} = JS_GetPropertyStr(ctx, colArr_${field.name}, \"bridge_dispatch\");")
   sb.appendLine("            if (!JS_IsUndefined(coldisp_${field.name})) {")
   sb.appendLine("                JniBridgeDispatch *coldisp_p_${field.name} = (JniBridgeDispatch *)(intptr_t)JS_VALUE_GET_FLOAT64(coldisp_${field.name});")
-  sb.appendLine("                $javaVar = coldisp_p_${field.name}->toJavaObject(env, ctx, &js_${field.name});")
+  sb.appendLine("                $javaVar = coldisp_p_${field.name}->toJavaObject(env, ctx, &colArr_${field.name});")
   sb.appendLine("                JS_FreeValue(ctx, coldisp_${field.name});")
   sb.appendLine("            } else {")
   sb.appendLine("                JS_FreeValue(ctx, coldisp_${field.name});")

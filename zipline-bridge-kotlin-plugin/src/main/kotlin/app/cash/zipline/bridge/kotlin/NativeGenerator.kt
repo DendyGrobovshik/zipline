@@ -279,23 +279,38 @@ internal fun generateNativeBridgeFile(outputDir: String, clazz: IrClass) {
         field.ktType == "kotlin.Any" || field.ktType == "kotlin.collections.List" -> {
           appendLine("    val ${field.name}Raw = JS_GetPropertyStr(ctx, jsVal, \"$propName\")")
           if (field.ktType == "kotlin.collections.List") {
+            // Kotlin/JS ArrayList wraps the JS array in a name-mangled 'array_1' property.
+            appendLine("    var ${field.name}Arr = ${field.name}Raw")
+            appendLine("    var _tmpArr_${field.name} = JS_GetPropertyStr(ctx, ${field.name}Raw, \"array_1\")")
+            appendLine("    if (JS_IsUndefined(_tmpArr_${field.name}) == 0) {")
+            appendLine("        JS_FreeValue(ctx, ${field.name}Raw)")
+            appendLine("        ${field.name}Arr = _tmpArr_${field.name}")
+            appendLine("    }")
             val elemType = field.arrayElementType?.substringAfterLast(".") ?: "Any"
             if (field.isNullable) {
-              appendLine("    val ${field.name}: List<$elemType>? = if (JS_IsUndefined(${field.name}Raw) != 0 || JS_IsNull(${field.name}Raw) != 0) null else {")
+              appendLine("    val ${field.name}: List<$elemType>? = if (JS_IsUndefined(${field.name}Arr) != 0 || JS_IsNull(${field.name}Arr) != 0) null else {")
             } else {
               appendLine("    val ${field.name}: List<$elemType> = run {")
             }
-            appendLine("        val lenVal = JS_GetPropertyStr(ctx, ${field.name}Raw, \"length\")")
+            appendLine("        val lenVal = JS_GetPropertyStr(ctx, ${field.name}Arr, \"length\")")
             appendLine("        val len = JsValueGetInt(lenVal)")
             appendLine("        JS_FreeValue(ctx, lenVal)")
             appendLine("        val list = mutableListOf<$elemType>()")
             appendLine("        var i = 0")
             appendLine("        while (i < len.toInt()) {")
-            appendLine("            val elem = JS_GetPropertyUint32(ctx, ${field.name}Raw, i.toUInt())")
-            appendLine("            list.add(bridgeForAny(ctx, elem) as $elemType)")
+            appendLine("            val elem = JS_GetPropertyUint32(ctx, ${field.name}Arr, i.toUInt())")
+            val elemConv = when (elemType) {
+              "Float" -> "(bridgeForAny(ctx, elem) as Double).toFloat()"
+              "Double" -> "bridgeForAny(ctx, elem) as Double"
+              "Int" -> "(bridgeForAny(ctx, elem) as Double).toInt()"
+              "Long" -> "JsNumberToLong(ctx, elem)"
+              else -> "bridgeForAny(ctx, elem) as $elemType"
+            }
+            appendLine("            list.add($elemConv)")
             appendLine("            JS_FreeValue(ctx, elem)")
             appendLine("            i++")
             appendLine("        }")
+            appendLine("        JS_FreeValue(ctx, ${field.name}Arr)")
             appendLine("        list")
             if (field.isNullable) appendLine("    }")
             else appendLine("    }")
