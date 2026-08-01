@@ -67,13 +67,21 @@ internal fun importForType(fqName: String): String {
 internal fun extractFields(annotatedClass: IrClass, includeValBodyFields: Boolean = false): List<FieldInfo> {
   val allProperties = mutableListOf<IrProperty>()
   collectProperties(annotatedClass, allProperties, mutableSetOf())
-  // Detect overridden names: if a name appears in both the class and a superclass,
-  // Kotlin/JS IR mangles it with a _1 (or higher) suffix.
+  // Compute own (non-inherited) property names to distinguish true overrides
+  // from synthetic inherited members. Only properties with backing fields
+  // (i.e. declared in this class) count as "own".
+  val ownPropertyNames = annotatedClass.declarations
+    .filterIsInstance<IrProperty>()
+    .filter { it.backingField != null }
+    .map { it.name.asString() }
+    .toSet()
+  // Detect overridden names: if a name appears in both the class's own declarations
+  // and a superclass, Kotlin/JS IR mangles it with a _1 (or higher) suffix.
   val nameCounts = mutableMapOf<String, Int>()
   for (prop in allProperties) {
     nameCounts[prop.name.asString()] = nameCounts.getOrDefault(prop.name.asString(), 0) + 1
   }
-  val overriddenNames = nameCounts.filter { it.value > 1 }.keys.toMutableSet()
+  val overriddenNames = nameCounts.filter { (name, count) -> count > 1 && name in ownPropertyNames }.keys.toMutableSet()
   // Also check supertypes without @WithJS2HostBridge — Kotlin/JS IR mangles
   // override val properties to name_1 even when the supertype isn't annotated.
   // collectProperties only recurses into annotated supertypes, so interface
@@ -85,12 +93,20 @@ internal fun extractFields(annotatedClass: IrClass, includeValBodyFields: Boolea
     for (superType in cls.superTypes) {
       val superClass = superType.getClass() ?: continue
       for (prop in superClass.properties) {
-        overriddenNames.add(prop.name.asString())
+        val name = prop.name.asString()
+        if (name in ownPropertyNames) {
+          overriddenNames.add(name)
+        }
       }
       collectOverrideNames(superClass)
     }
   }
   collectOverrideNames(annotatedClass)
+
+
+  // Track which property names have a backing field anywhere in the hierarchy.
+  // Used later to distinguish inherited-backed from inherited-computed.
+  val namesWithBackingField = allProperties.filter { it.backingField != null }.map { it.name.asString() }.toSet()
 
   // Deduplicate by name, keeping first occurrence (subclass overrides superclass)
   val seenNames = mutableSetOf<String>()
@@ -162,9 +178,9 @@ internal fun extractFields(annotatedClass: IrClass, includeValBodyFields: Boolea
       else jniFieldDescriptor(effectiveKtType)
     val name = property.name.asString()
     val isConstructorParam = name in primaryConstructorParamNames
+    // Skip computed getters: no backing field anywhere in the hierarchy.
+    if (!isConstructorParam && property.backingField == null && property.name.asString() !in namesWithBackingField) return@mapNotNull null
 
-    // Skip computed getters (body fields with no backing field).
-    if (!isConstructorParam && property.backingField == null) return@mapNotNull null
     // Computed vals can't be reassigned in Native codegen; C codegen reads them via JS_GetPropertyStr.
     if (!isConstructorParam && !property.isVar && !includeValBodyFields) return@mapNotNull null
 

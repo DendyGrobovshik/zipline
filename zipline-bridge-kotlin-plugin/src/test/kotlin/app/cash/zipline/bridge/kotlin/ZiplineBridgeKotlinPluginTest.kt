@@ -140,8 +140,8 @@ class ZiplineBridgeKotlinPluginTest {
 
       // Field setting
       assertTrue(content.contains("GetFieldID"))
-      assertTrue(content.contains("SetObjectField(env, result, field_name, java_name)"))
-      assertTrue(content.contains("SetIntField(env, result, field_age, java_age)"))
+      assertTrue(content.contains("(*env)->SetObjectField(env, result, _fld_name, java_name)"))
+      assertTrue(content.contains("(*env)->SetIntField(env, result, _fld_age, java_age)"))
 
       // Return
       assertTrue(content.contains("return result;"))
@@ -267,9 +267,9 @@ class ZiplineBridgeKotlinPluginTest {
         "Should extract own 'breed' field")
 
       // Both fields are set after construction
-      assertTrue(content.contains("SetObjectField(env, result, field_species, java_species)"),
+      assertTrue(content.contains("(*env)->SetObjectField(env, result, _fld_species, java_species)"),
         "Should set inherited 'species' field")
-      assertTrue(content.contains("SetObjectField(env, result, field_breed, java_breed)"),
+      assertTrue(content.contains("(*env)->SetObjectField(env, result, _fld_breed, java_breed)"),
         "Should set own 'breed' field")
 
       // toJavaObject function targets Dog, not Animal
@@ -337,7 +337,7 @@ class ZiplineBridgeKotlinPluginTest {
       assertTrue(content.contains("JS_FreeValue(ctx, disp_val_child)"))
 
       // Object field uses SetObjectField with proper descriptor
-      assertTrue(content.contains("SetObjectField(env, result, field_child, java_child)"))
+      assertTrue(content.contains("(*env)->SetObjectField(env, result, _fld_child, java_child)"))
       assertTrue(content.contains("\"Lcom/example/Nested;\""),
         "Should use proper JNI field descriptor for Nested type")
     } finally {
@@ -631,14 +631,14 @@ class ZiplineBridgeKotlinPluginTest {
 
       // Pre-lookup of boxed class and constructor
       assertTrue(content.contains("FindClass(env, \"java/lang/Integer\")"))
-      assertTrue(content.contains("GetMethodID(env, cls_age, \"<init>\", \"(I)V\")"))
+      assertTrue(content.contains("GetMethodID(env, _boxed_age, \"<init>\", \"(I)V\")"))
 
       // Null check
       assertTrue(content.contains("JS_IsUndefined(js_age)"))
       assertTrue(content.contains("JS_IsNull(js_age)"))
 
       // Boxing via NewObject
-      assertTrue(content.contains("NewObject(env, cls_age, ctor_age, (jint)JS_VALUE_GET_INT(js_age))"))
+      assertTrue(content.contains("NewObject(env, _boxed_age, _boxedCtor_age, (jint)JS_VALUE_GET_INT(js_age))"))
 
       // Null branch
       assertTrue(content.contains("java_age = NULL;"))
