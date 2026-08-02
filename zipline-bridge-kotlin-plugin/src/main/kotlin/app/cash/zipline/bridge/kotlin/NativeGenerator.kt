@@ -13,65 +13,6 @@ import java.io.File
 
 // -- Kotlin/Native bridge code generation (iOS) --
 
-internal fun generateNativeBridgeRetainFile(outputDir: String, bridgeEntries: List<Pair<String, String>>, retainValName: String) {
-  // Unique init function name, also used as the export name.
-  // Drop leading _ — Apple linker adds its own _ prefix for the C name.
-  val initFnName = "${retainValName}_init"
-  val cName = retainValName.drop(1) + "_init"
-
-  val source = buildString {
-    appendLine("@file:Suppress(\"unused\")")
-    appendLine("@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class, kotlin.experimental.ExperimentalNativeApi::class)")
-    appendLine("package generated_bridges")
-    appendLine()
-    appendLine("import app.cash.zipline.registerBridge")
-    appendLine("import kotlin.native.CName")
-    appendLine()
-    appendLine("// Retain references to bridge functions to prevent dead-code elimination.")
-    appendLine("private val _retain = arrayOf<Any>(")
-    bridgeEntries.forEachIndexed { i, (_, fnName) ->
-      val sep = if (i < bridgeEntries.lastIndex) "," else ""
-      appendLine("    ::$fnName$sep")
-    }
-    appendLine(")")
-    appendLine()
-    appendLine("@CName(\"$cName\")")
-    appendLine("public fun $initFnName(): Unit {")
-    appendLine("    _retain.hashCode()")
-    for ((fqn, fnName) in bridgeEntries) {
-      appendLine("    registerBridge(\"$fqn\", ::$fnName)")
-    }
-    appendLine("}")
-  }
-  val file = java.io.File(outputDir, "_BridgeRetainAll.kt")
-  file.parentFile.mkdirs()
-  file.writeText(source)
-
-  // Generate exports list for cross-module merging
-  val exportsFile = java.io.File(outputDir, "_bridge_exports.txt")
-  exportsFile.writeText(initFnName)
-
-  // Generate cinterop .def with C constructor that calls @CName function.
-  val defSource = buildString {
-    appendLine("package = bridge_init_$retainValName")
-    appendLine("---")
-    appendLine("extern void $cName(void);")
-    appendLine("__attribute__((constructor))")
-    appendLine("static void _bridge_constructor_${retainValName}() {")
-    appendLine("    $cName();")
-    appendLine("}")
-  }
-  val defFile = java.io.File(outputDir, "bridge_init.def")
-  defFile.parentFile.mkdirs()
-  defFile.writeText(defSource)
-
-  // Generate entry points file to prevent DCE of @CName functions.
-  val entryPoints = buildString {
-    appendLine("function kotlin.root.$initFnName")
-  }
-  val epFile = java.io.File(outputDir, "bridge-entrypoints.txt")
-  epFile.writeText(entryPoints.toString())
-}
 
 internal fun generateNativeBridgeFile(outputDir: String, clazz: IrClass) {
   val fqn = clazz.fqNameWhenAvailable?.asString() ?: return
@@ -367,6 +308,13 @@ internal fun generateNativeBridgeFile(outputDir: String, clazz: IrClass) {
     }
     appendLine("    return _obj")
     appendLine("}")
+    appendLine()
+    appendLine("@OptIn(kotlin.ExperimentalStdlibApi::class)")
+    appendLine("@kotlin.native.EagerInitialization")
+    appendLine("private val _bridgeInit_${functionName} = run {")
+    appendLine("    registerBridge(\"$fqn\", ::$functionName)")
+    appendLine("    Unit")
+    appendLine("}")
   }
 
   val fileName = "${fqn.replace(".", "_")}_bridge_native.kt"
@@ -375,20 +323,10 @@ internal fun generateNativeBridgeFile(outputDir: String, clazz: IrClass) {
   file.writeText(source)
 }
 
-/** Generate all per-class native bridge files + a combined retain-all registration file. */
+/** Generate per-class native bridge files. Each file self-registers via @EagerInitialization. */
 internal fun generateNativeBridges(outputDir: String, dispatchClasses: List<IrClass>) {
-  val bridgeEntries = mutableListOf<Pair<String, String>>()
   for (clazz in dispatchClasses) {
     val fqn = clazz.fqNameWhenAvailable?.asString() ?: continue
-    val fnName = "${clazz.name.asString()}_toKotlin"
     generateNativeBridgeFile(outputDir, clazz)
-    if (java.io.File(outputDir, "${fqn.replace(".", "_")}_bridge_native.kt").exists()) {
-      bridgeEntries.add(fqn to fnName)
-    }
-  }
-  if (bridgeEntries.isNotEmpty()) {
-    val retainValName = "_bridgeRetainAll_${dispatchClasses.first().name.asString()}"
-    generateNativeBridgeRetainFile(outputDir, bridgeEntries, retainValName)
   }
 }
-

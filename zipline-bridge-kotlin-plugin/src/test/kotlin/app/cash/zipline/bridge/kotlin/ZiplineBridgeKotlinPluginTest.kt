@@ -1148,7 +1148,7 @@ class ZiplineBridgeNativePluginTest {
   }
 
   @Test
-  fun `retain file uses function reference not staticCFunction`() {
+  fun `per-class bridge self-registers via EagerInitialization`() {
     val outputDir = createTempDirectory("zipline-bridge-native-test")
     try {
       val result = compileWithNativeOutputDir(
@@ -1165,18 +1165,18 @@ class ZiplineBridgeNativePluginTest {
       )
       assertEquals(KotlinCompilation.ExitCode.OK, result.exitCode, result.messages)
 
+      // Per-class file has @EagerInitialization self-registration
+      val bridgeFile = outputDir.resolve("com_example_Foo_bridge_native.kt").toFile()
+      assertTrue(bridgeFile.exists(), "Expected per-class bridge file")
+      val bridgeContent = bridgeFile.readText()
+      assertTrue(bridgeContent.contains("@kotlin.native.EagerInitialization"))
+      assertTrue(bridgeContent.contains("registerBridge(\"com.example.Foo\", ::Foo_toKotlin)"))
+      assertFalse(bridgeContent.contains("staticCFunction"), "Should not use staticCFunction")
+
+
+      // No centralized retain file — each class self-registers
       val retainFile = outputDir.resolve("_BridgeRetainAll.kt").toFile()
-      assertTrue(retainFile.exists(), "Expected _BridgeRetainAll.kt")
-
-      val content = retainFile.readText()
-
-      // registerBridge uses ::fnName, not staticCFunction
-      assertTrue(content.contains("registerBridge(\"com.example.Foo\", ::Foo_toKotlin)"))
-      assertFalse(content.contains("staticCFunction"), "Should not use staticCFunction")
-
-      // Retain array holds function references
-      assertTrue(content.contains("private val _retain = arrayOf<Any>("))
-      assertTrue(content.contains("::Foo_toKotlin"))
+      assertFalse(retainFile.exists(), "_BridgeRetainAll.kt should not be generated")
     } finally {
       outputDir.toFile().deleteRecursively()
     }
