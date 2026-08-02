@@ -87,6 +87,7 @@ public:
   jclass booleanClass;
   jclass integerClass;
   jclass doubleClass;
+  jclass longClass;
   jclass objectClass;
   jclass stringClass;
   jclass memoryUsageClass;
@@ -95,6 +96,7 @@ public:
   jmethodID booleanValueOf;
   jmethodID integerValueOf;
   jmethodID doubleValueOf;
+  jmethodID longValueOf;
   jmethodID stringGetBytes;
   jmethodID stringConstructor;
   jmethodID memoryUsageConstructor;

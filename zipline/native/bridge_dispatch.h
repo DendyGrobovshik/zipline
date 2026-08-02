@@ -38,7 +38,11 @@ void init_all(JNIEnv* env);
 
 /** Install __bridgeRegister on global and run register_all. */
 void register_all(JSContext* ctx);
+/** If val is a Kotlin/JS Long ({low_1, high_1}), return a boxed java.lang.Long, else NULL. */
+jobject bridgeTryUnwrapLong(JNIEnv *env, JSContext *ctx, const JSValue *val);
 
+/** Convert any JS value to a Java object. Returns NULL for null/undefined/unrecognized. */
+jobject bridgeForAny(JNIEnv *env, JSContext *ctx, const JSValue *val);
 #ifdef __cplusplus
 }
 #endif

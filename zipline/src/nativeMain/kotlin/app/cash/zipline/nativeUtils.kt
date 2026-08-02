@@ -118,13 +118,38 @@ public fun bridgeForAny(ctx: CPointer<JSContext>, jsVal: CValue<JSValue>): Any? 
   JS_IsUndefined(jsVal) != 0 || JS_IsNull(jsVal) != 0 -> null
   else -> {
     val dispatch = JS_GetPropertyStr(ctx, jsVal, "bridge_dispatch")
-    if (JS_IsUndefined(dispatch) != 0) {
-      null
-    } else {
+    if (JS_IsUndefined(dispatch) == 0) {
       val fn = JsValueGetFloat64(dispatch).toRawBits().toCPointer<UByteVar>()!!.asStableRef<(CPointer<JSContext>, CValue<JSValue>) -> Any>()
       val r = fn.get()(ctx, jsVal)
       JS_FreeValue(ctx, dispatch)
       r
+    } else {
+      JS_FreeValue(ctx, dispatch)
+      // Check for Kotlin/JS Long: {low_1, high_1} with constructor.name === "Long"
+      val lo = JS_GetPropertyStr(ctx, jsVal, "low_1")
+      if (JS_IsUndefined(lo) == 0) {
+        val ctor = JS_GetPropertyStr(ctx, jsVal, "constructor")
+        var isLong = false
+        if (JS_IsUndefined(ctor) == 0) {
+          val ctorName = JS_GetPropertyStr(ctx, ctor, "name")
+          val ctorNameStr = JS_ToCString(ctx, ctorName)
+          isLong = ctorNameStr?.toKStringFromUtf8() == "Long"
+          JS_FreeCString(ctx, ctorNameStr)
+          JS_FreeValue(ctx, ctorName)
+        }
+        JS_FreeValue(ctx, ctor)
+        if (isLong) {
+          val hi = JS_GetPropertyStr(ctx, jsVal, "high_1")
+          val loVal = JsValueGetInt(lo).toLong() and 0xFFFFFFFFL
+          val hiVal = JsValueGetInt(hi).toLong() shl 32
+          val lv = hiVal or loVal
+          JS_FreeValue(ctx, hi)
+          JS_FreeValue(ctx, lo)
+          return lv
+        }
+        JS_FreeValue(ctx, lo)
+      }
+      null
     }
   }
 }

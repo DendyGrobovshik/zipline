@@ -149,6 +149,7 @@ Context::Context(JNIEnv* env)
       booleanClass(static_cast<jclass>(env->NewGlobalRef(env->FindClass("java/lang/Boolean")))),
       integerClass(static_cast<jclass>(env->NewGlobalRef(env->FindClass("java/lang/Integer")))),
       doubleClass(static_cast<jclass>(env->NewGlobalRef(env->FindClass("java/lang/Double")))),
+      longClass(static_cast<jclass>(env->NewGlobalRef(env->FindClass("java/lang/Long")))),
       objectClass(static_cast<jclass>(env->NewGlobalRef(env->FindClass("java/lang/Object")))),
       stringClass(static_cast<jclass>(env->NewGlobalRef(env->FindClass("java/lang/String")))),
       stringUtf8(static_cast<jstring>(env->NewGlobalRef(env->NewStringUTF("UTF-8")))),
@@ -158,6 +159,7 @@ Context::Context(JNIEnv* env)
       integerValueOf(env->GetStaticMethodID(integerClass, "valueOf", "(I)Ljava/lang/Integer;")),
       doubleValueOf(env->GetStaticMethodID(doubleClass, "valueOf", "(D)Ljava/lang/Double;")),
       stringGetBytes(env->GetMethodID(stringClass, "getBytes", "(Ljava/lang/String;)[B")),
+      longValueOf(env->GetStaticMethodID(longClass, "valueOf", "(J)Ljava/lang/Long;")),
       stringConstructor(env->GetMethodID(stringClass, "<init>", "([BLjava/lang/String;)V")),
       quickJsExceptionConstructor(env->GetMethodID(quickJsExceptionClass, "<init>",
                                                    "(Ljava/lang/String;Ljava/lang/String;)V")),
@@ -201,6 +203,7 @@ Context::~Context() {
   env->DeleteGlobalRef(objectClass);
   env->DeleteGlobalRef(doubleClass);
   env->DeleteGlobalRef(integerClass);
+  env->DeleteGlobalRef(longClass);
   env->DeleteGlobalRef(booleanClass);
   JS_FreeAtom(jsContext, lengthAtom);
   JS_FreeAtom(jsContext, callAtom);
@@ -416,6 +419,92 @@ void Context::setOutboundCallChannel(JNIEnv* env, jstring name, jobject callChan
   JS_FreeValue(jsContext, global);
 }
 
+
+__attribute__((used, visibility("default"))) jobject bridgeTryUnwrapLong(JNIEnv *env, JSContext *ctx, const JSValue *val) {
+  JSValue lo = JS_GetPropertyStr(ctx, *val, "low_1");
+  if (JS_IsUndefined(lo)) return nullptr;
+
+  JSValue ctor = JS_GetPropertyStr(ctx, *val, "constructor");
+  int isLong = 0;
+  if (!JS_IsUndefined(ctor)) {
+    JSValue ctorName = JS_GetPropertyStr(ctx, ctor, "name");
+    const char* ctorNameStr = JS_ToCString(ctx, ctorName);
+    isLong = (ctorNameStr != nullptr && strcmp(ctorNameStr, "Long") == 0);
+    JS_FreeCString(ctx, ctorNameStr);
+    JS_FreeValue(ctx, ctorName);
+  }
+  JS_FreeValue(ctx, ctor);
+
+  if (!isLong) {
+    JS_FreeValue(ctx, lo);
+    return nullptr;
+  }
+
+  JSValue hi = JS_GetPropertyStr(ctx, *val, "high_1");
+  jint loVal = JS_VALUE_GET_INT(lo);
+  jint hiVal = JS_VALUE_GET_INT(hi);
+  jlong lv = ((jlong)hiVal << 32) | ((jlong)loVal & 0xFFFFFFFF);
+  JS_FreeValue(ctx, hi);
+  JS_FreeValue(ctx, lo);
+
+  auto* context = reinterpret_cast<Context*>(JS_GetRuntimeOpaque(JS_GetRuntime(ctx)));
+  jvalue v;
+  v.j = lv;
+  return env->CallStaticObjectMethodA(context->longClass, context->longValueOf, &v);
+}
+
+__attribute__((used, visibility("default"))) jobject bridgeForAny(JNIEnv *env, JSContext *ctx, const JSValue *val) {
+  int tag = JS_VALUE_GET_NORM_TAG(*val);
+  auto* context = reinterpret_cast<Context*>(JS_GetRuntimeOpaque(JS_GetRuntime(ctx)));
+
+  switch (tag) {
+    case JS_TAG_INT: {
+      jvalue v;
+      v.j = static_cast<jint>(JS_VALUE_GET_INT(*val));
+      return env->CallStaticObjectMethodA(context->integerClass, context->integerValueOf, &v);
+    }
+    case JS_TAG_FLOAT64: {
+      jvalue v;
+      v.d = static_cast<jdouble>(JS_VALUE_GET_FLOAT64(*val));
+      return env->CallStaticObjectMethodA(context->doubleClass, context->doubleValueOf, &v);
+    }
+    case JS_TAG_BOOL: {
+      jvalue v;
+      v.z = static_cast<jboolean>(JS_VALUE_GET_BOOL(*val));
+      return env->CallStaticObjectMethodA(context->booleanClass, context->booleanValueOf, &v);
+    }
+    case JS_TAG_STRING:
+      return context->toJavaString(env, *val);
+
+    case JS_TAG_NULL:
+    case JS_TAG_UNDEFINED:
+      return nullptr;
+
+    case JS_TAG_OBJECT: {
+      jobject result = nullptr;
+      // 1) Try bridge_dispatch
+      JSValue disp = JS_GetPropertyStr(ctx, *val, "bridge_dispatch");
+      if (!JS_IsUndefined(disp)) {
+        auto* d = (JniBridgeDispatch*)(intptr_t)JS_VALUE_GET_FLOAT64(disp);
+        if (d != nullptr) {
+          result = d->toJavaObject(env, ctx, val);
+        }
+        JS_FreeValue(ctx, disp);
+        if (result) return result;
+      } else {
+        JS_FreeValue(ctx, disp);
+      }
+      // 2) Try Kotlin/JS Long
+      result = bridgeTryUnwrapLong(env, ctx, val);
+      if (result) return result;
+      return nullptr;
+    }
+
+    default:
+      return nullptr;
+  }
+}
+
 jobject
 Context::toJavaObject(JNIEnv* env, const JSValueConst& value, bool throwOnUnsupportedType) {
   jobject result;
@@ -454,9 +543,6 @@ Context::toJavaObject(JNIEnv* env, const JSValueConst& value, bool throwOnUnsupp
 
     case JS_TAG_NULL:
     case JS_TAG_UNDEFINED:
-      result = nullptr;
-      break;
-
     case JS_TAG_OBJECT:
       if (JS_IsArray(jsContext, value)) {
         auto arrayLengthProperty = JS_GetPropertyStr(jsContext, value, "length");
@@ -473,6 +559,25 @@ Context::toJavaObject(JNIEnv* env, const JSValueConst& value, bool throwOnUnsupp
           JS_FreeValue(jsContext, element);
         }
         break;
+      }
+      // Try bridge_dispatch
+      {
+        JSValue disp = JS_GetPropertyStr(jsContext, value, "bridge_dispatch");
+        if (!JS_IsUndefined(disp)) {
+          auto* d = (JniBridgeDispatch*)(intptr_t)JS_VALUE_GET_FLOAT64(disp);
+          if (d != nullptr) {
+            result = d->toJavaObject(env, jsContext, &value);
+          }
+          JS_FreeValue(jsContext, disp);
+          if (result) return result;
+        } else {
+          JS_FreeValue(jsContext, disp);
+        }
+      }
+      // Try Kotlin/JS Long
+      {
+        result = bridgeTryUnwrapLong(env, jsContext, &value);
+        if (result) return result;
       }
       // Fall through.
     default:

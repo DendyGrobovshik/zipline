@@ -19,5 +19,7 @@ target_link_options(quickjs PRIVATE "-Wl,--undefined=addBridgeEntry")
 target_link_options(quickjs PRIVATE "-Wl,--undefined=addBridgeInit")
 target_link_options(quickjs PRIVATE "-Wl,--undefined=init_all")
 target_link_options(quickjs PRIVATE "-Wl,--undefined=register_all")
+target_link_options(quickjs PRIVATE "-Wl,--undefined=bridgeForAny")
+target_link_options(quickjs PRIVATE "-Wl,--undefined=bridgeTryUnwrapLong")
 # Export QuickJS internal symbols so libredwood-bridge can link against them
 set_target_properties(quickjs PROPERTIES C_VISIBILITY_PRESET default)
