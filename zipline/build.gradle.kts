@@ -297,3 +297,21 @@ configure<MavenPublishBaseExtension> {
     KotlinMultiplatform(javadocJar = JavadocJar.Empty())
   )
 }
+
+// Bundle native headers into the AAR assets for consumer CMake builds.
+val copyBridgeHeaders by tasks.registering(Copy::class) {
+  from("native") {
+    include("bridge_dispatch.h")
+    include("quickjs/quickjs.h")
+  }
+  into(layout.buildDirectory.dir("generated/assets/bridge-headers"))
+}
+
+android {
+  sourceSets {
+    getByName("main").assets.srcDir(copyBridgeHeaders)
+  }
+}
+tasks.matching { it.name.startsWith("merge") && it.name.contains("Assets") }.configureEach {
+  dependsOn(copyBridgeHeaders)
+}
