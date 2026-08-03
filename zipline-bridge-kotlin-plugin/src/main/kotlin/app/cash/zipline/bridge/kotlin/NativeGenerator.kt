@@ -44,6 +44,8 @@ internal fun generateNativeBridgeFile(outputDir: String, clazz: IrClass) {
   }
 
   val source = buildString {
+    appendLine("// GENERATED FILE. DO NOT MODIFY MANUALLY.")
+    appendLine()
     appendLine("@file:Suppress(\"UNUSED_PARAMETER\", \"unused\", \"INVISIBLE_MEMBER\", \"INVISIBLE_REFERENCE\", \"UNCHECKED_CAST\")")
     appendLine("@file:OptIn(app.cash.redwood.RedwoodCodegenApi::class, kotlinx.cinterop.ExperimentalForeignApi::class)")
     appendLine("package generated_bridges")

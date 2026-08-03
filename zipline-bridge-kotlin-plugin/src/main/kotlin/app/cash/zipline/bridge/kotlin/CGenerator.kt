@@ -65,6 +65,8 @@ internal fun generateBridgeFile(outputDir: String, annotatedClass: IrClass) {
   val instanceSig = if (isObject) "L${jniClassName.replace(".", "/")};" else ""
 
   val cSource = buildString {
+    appendLine("// GENERATED FILE. DO NOT MODIFY MANUALLY.")
+    appendLine()
     appendLine("#include <jni.h>")
     appendLine("#include \"quickjs/quickjs.h\"")
     appendLine("#include \"bridge_dispatch.h\"")
@@ -220,6 +222,7 @@ internal fun generateBridgeFile(outputDir: String, annotatedClass: IrClass) {
       val nullablePrimitive = field.isNullable && isKnownType(field.ktType) && isJniPrimitive(field.ktType)
       val cType = if (nullablePrimitive) "jobject"
         else kotlinToCType[field.ktType] ?: "jobject"
+      // JVM value for the field
       val javaVar = "java_${field.name}"
 
       appendLine("    JSValue js_${field.name} = JS_GetPropertyStr(ctx, *jsObj, \"${field.jsPropertyName}\");")
@@ -375,6 +378,7 @@ internal fun generateBridgeFile(outputDir: String, annotatedClass: IrClass) {
       if (constructorFields.isEmpty()) {
         appendLine("    jobject result = (*env)->NewObject(env, _cls, _ctor);")
       } else {
+        // `java_${it.name}` is what used to be called `javaVar` in the field-extracting loop.
         val args = constructorFields.joinToString(", ") { "java_${it.name}" }
         appendLine("    jobject result = (*env)->NewObject(env, _cls, _ctor, $args);")
       }
@@ -386,12 +390,13 @@ internal fun generateBridgeFile(outputDir: String, annotatedClass: IrClass) {
     if (bodyFields.isNotEmpty()) {
       appendLine("    // Set non-constructor fields")
       for (field in bodyFields) {
+        val javaVar = "java_${field.name}"  // Same var name as in the field-extracting loop
         val setFn = when {
           field.isNullable && isKnownType(field.ktType) && isJniPrimitive(field.ktType) -> "SetObjectField"
           else -> kotlinToSetFieldFunction[field.ktType] ?: "SetObjectField"
         }
         appendLine("    if (_fld_${field.name} != NULL) {")
-        appendLine("        (*env)->$setFn(env, result, _fld_${field.name}, java_${field.name});")
+        appendLine("        (*env)->$setFn(env, result, _fld_${field.name}, $javaVar);")
         appendLine("    }")
       }
       appendLine()
@@ -492,7 +497,7 @@ internal fun emitArrayPreamble(sb: StringBuilder, jsVar: String) {
   sb.appendLine("        JS_FreeValue(ctx, js_len_${jsVar});")
 }
 
-/** Emit loop for a primitive specialised array (IntArray, FloatArray, etc.). */
+/** Emit loop for a primitive specialized array (IntArray, FloatArray, etc.). */
 internal fun emitPrimitiveArrayLoop(
   sb: StringBuilder,
   field: FieldInfo,
