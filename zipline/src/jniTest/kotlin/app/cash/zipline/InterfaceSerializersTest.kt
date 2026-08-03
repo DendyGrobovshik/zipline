@@ -52,7 +52,7 @@ class InterfaceSerializersTest {
   }
 
   @Test fun jvmToJsRequestInterfaceSucceeds() = runTest(dispatcher) {
-    zipline.quickJs.evaluate(
+    zipline.jsEngine.evaluate(
       "testing.app.cash.zipline.testing.prepareInterfaceSerializersJsBridges()",
     )
     val service = zipline.take<RequestInterfaceService>("requestInterfaceService")
@@ -61,7 +61,7 @@ class InterfaceSerializersTest {
   }
 
   @Test fun jvmToJsResponseInterfaceSucceeds() = runTest(dispatcher) {
-    zipline.quickJs.evaluate(
+    zipline.jsEngine.evaluate(
       "testing.app.cash.zipline.testing.prepareInterfaceSerializersJsBridges()",
     )
     val service = zipline.take<ResponseInterfaceService>("responseInterfaceService")
@@ -75,7 +75,7 @@ class InterfaceSerializersTest {
       JvmMessageInterfaceService(),
     )
 
-    val result = zipline.quickJs.evaluate(
+    val result = zipline.jsEngine.evaluate(
       "testing.app.cash.zipline.testing.callInterfaceRequest()",
     )
     assertThat(result).isEqualTo("JVM received an interface, Jesse")
@@ -87,7 +87,7 @@ class InterfaceSerializersTest {
       JvmMessageInterfaceService(),
     )
 
-    val result = zipline.quickJs.evaluate(
+    val result = zipline.jsEngine.evaluate(
       "testing.app.cash.zipline.testing.callInterfaceResponse()",
     )
     assertThat(result).isEqualTo("JVM returned an interface, Jesse")
@@ -100,7 +100,7 @@ class InterfaceSerializersTest {
     )
 
     val exception = assertFailsWith<SerializationException> {
-      ziplineNoSerializer.quickJs.evaluate(
+      ziplineNoSerializer.jsEngine.evaluate(
         "testing.app.cash.zipline.testing.callInterfaceRequest()",
       )
     }
@@ -116,7 +116,7 @@ class InterfaceSerializersTest {
     )
 
     val exception = assertFailsWith<SerializationException> {
-      ziplineNoSerializer.quickJs.evaluate(
+      ziplineNoSerializer.jsEngine.evaluate(
         "testing.app.cash.zipline.testing.callInterfaceResponse()",
       )
     }

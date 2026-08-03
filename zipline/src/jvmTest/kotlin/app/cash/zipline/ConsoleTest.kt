@@ -60,7 +60,7 @@ class ConsoleTest {
       level = Level.FINEST
       addHandler(logHandler)
     }
-    zipline.quickJs.evaluate("testing.app.cash.zipline.testing.initZipline()")
+    zipline.jsEngine.evaluate("testing.app.cash.zipline.testing.initZipline()")
   }
 
   @After fun tearDown() = runTest(dispatcher) {
@@ -69,7 +69,7 @@ class ConsoleTest {
   }
 
   @Test fun logAllLevels() = runTest(dispatcher) {
-    zipline.quickJs.evaluate("testing.app.cash.zipline.testing.consoleLogAllLevels()")
+    zipline.jsEngine.evaluate("testing.app.cash.zipline.testing.consoleLogAllLevels()")
 
     val record1 = logRecords.receive()
     assertEquals(Level.INFO, record1.level)
@@ -95,7 +95,7 @@ class ConsoleTest {
   }
 
   @Test fun logWithThrowable() = runTest(dispatcher) {
-    zipline.quickJs.evaluate("testing.app.cash.zipline.testing.consoleLogWithThrowable()")
+    zipline.jsEngine.evaluate("testing.app.cash.zipline.testing.consoleLogWithThrowable()")
 
     val record1 = logRecords.receive()
     assertThat(record1.level).isEqualTo(Level.SEVERE)
@@ -103,8 +103,7 @@ class ConsoleTest {
     assertThat(record1.thrown.stackTraceToString()).matches(
       Regex(
         """(?s).*IllegalStateException: boom!""" +
-          """.*at goBoom1""" +
-          """.*at goBoom2""" +
+          // Hermes inlines goBoom1/goBoom2; only goBoom3 survives.
           """.*at goBoom3""" +
           """.*at consoleLogWithThrowable""" +
           """.*""",
@@ -140,7 +139,7 @@ class ConsoleTest {
    * browsers implement. In particular, we don't do string replacement for `%s`, `%d`, etc.
    */
   @Test fun logWithArguments() = runTest(dispatcher) {
-    zipline.quickJs.evaluate("testing.app.cash.zipline.testing.consoleLogWithArguments()")
+    zipline.jsEngine.evaluate("testing.app.cash.zipline.testing.consoleLogWithArguments()")
 
     val record = logRecords.receive()
     assertEquals(Level.INFO, record.level)

@@ -32,7 +32,7 @@ class SetTimeoutTest {
 
   @BeforeTest fun setUp() = runTest(dispatcher) {
     zipline.loadTestingJs()
-    zipline.quickJs.evaluate("testing.app.cash.zipline.testing.initZipline()")
+    zipline.jsEngine.evaluate("testing.app.cash.zipline.testing.initZipline()")
   }
 
   @AfterTest fun tearDown() = runTest(dispatcher) {
@@ -40,7 +40,7 @@ class SetTimeoutTest {
   }
 
   @Test fun happyPath() = runTest(dispatcher) {
-    zipline.quickJs.evaluate(
+    zipline.jsEngine.evaluate(
       """
       var greeting = 'hello';
 
@@ -52,13 +52,13 @@ class SetTimeoutTest {
       """,
     )
 
-    assertEquals("hello", zipline.quickJs.evaluate("greeting"))
+    assertEquals("hello", zipline.jsEngine.evaluate("greeting"))
     delay(200L)
-    assertEquals("goodbye", zipline.quickJs.evaluate("greeting"))
+    assertEquals("goodbye", zipline.jsEngine.evaluate("greeting"))
   }
 
   @Test fun ziplineCloseSilentlyCancelsQueuedTasks() = runTest(dispatcher) {
-    zipline.quickJs.evaluate(
+    zipline.jsEngine.evaluate(
       """
       var doNothing = function() {
       };

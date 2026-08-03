@@ -15,7 +15,7 @@
  */
 package app.cash.zipline.loader.testing
 
-import app.cash.zipline.QuickJs
+import app.cash.zipline.JsEngine
 import app.cash.zipline.ZiplineManifest
 import app.cash.zipline.loader.CURRENT_ZIPLINE_VERSION
 import app.cash.zipline.loader.ZiplineFile
@@ -82,11 +82,11 @@ class LoaderTestFixtures {
   )
 
   fun createZiplineFile(javaScript: String, fileName: String): ByteString {
-    val quickJs = QuickJs.create()
+    val jsEngine = JsEngine.create()
     val compiledJavaScript = try {
-      quickJs.compile(javaScript, fileName)
+      jsEngine.compile(javaScript, fileName)
     } finally {
-      quickJs.close()
+      jsEngine.close()
     }
     val ziplineFile = ZiplineFile(
       CURRENT_ZIPLINE_VERSION,

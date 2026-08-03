@@ -27,6 +27,27 @@ class JsEchoService(
   }
 }
 
+/** A stateful guest service: every call increments and returns the counter. */
+class JsCountingEchoService : EchoService {
+  private var count = 0
+
+  override fun echo(request: EchoRequest): EchoResponse {
+    count++
+    return EchoResponse("call #$count")
+  }
+}
+
+@JsExport
+fun prepareCountingBridges() {
+  zipline.bind<EchoService>("countingService", JsCountingEchoService())
+}
+
+@JsExport
+fun callCountingService(): String {
+  val service = zipline.take<EchoService>("countingService")
+  return service.echo(EchoRequest("")).message
+}
+
 private val zipline by lazy { Zipline.get() }
 
 /**
@@ -49,6 +70,12 @@ fun callSupService(message: String): String {
   val supService = zipline.take<EchoService>("supService")
   val echoResponse = supService.echo(EchoRequest(message))
   return "JavaScript received '${echoResponse.message}' from the JVM"
+}
+
+@JsExport
+fun callEchoServiceByName(serviceName: String, message: String): String {
+  val service = zipline.take<EchoService>(serviceName)
+  return service.echo(EchoRequest(message)).message
 }
 
 @JsExport

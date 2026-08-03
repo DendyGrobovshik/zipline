@@ -13,71 +13,73 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <assert.h>
 #include "InboundCallChannel.h"
-#include "quickjs/quickjs.h"
-#include "Context.h"
-#include "ExceptionThrowers.h"
 
-InboundCallChannel::InboundCallChannel(JSContext *jsContext, const char *name)
-    : jsContext(jsContext),
-      nameAtom(JS_NewAtom(jsContext, name)){
-}
+#include <jsi/jsi.h>
 
-InboundCallChannel::~InboundCallChannel() {
-  JS_FreeAtom(jsContext, nameAtom);
-}
+namespace jsi = facebook::jsi;
 
-jstring InboundCallChannel::call(Context *context, JNIEnv* env,
-                                      jstring callJson) const {
-  JSContext *jsContext = context->jsContext;
-  JSValue global = JS_GetGlobalObject(jsContext);
-  JSValue thisPointer = JS_GetProperty(jsContext, global, nameAtom);
-  JSValueConst arguments[1];
-  arguments[0] = context->toJsString(env, callJson);
+namespace {
 
-  JSValue jsResult = JS_Invoke(jsContext, thisPointer, context->callAtom, 1, arguments);
-  jstring javaResult;
-  auto tag = JS_VALUE_GET_NORM_TAG(jsResult);
-  if (tag == JS_TAG_EXCEPTION) {
-    context->throwJsException(env, jsResult);
-    javaResult = nullptr;
-  } else if (tag == JS_TAG_STRING) {
-    javaResult = context->toJavaString(env, jsResult);
-  } else {
-    assert(false); // Unexpected tag.
+jsi::Value invokeServiceMethod(
+    ContextBase* context,
+    const std::string& serviceName,
+    const std::string& methodName,
+    const std::string& cppArg) {
+  jsi::Runtime& rt = context->getRuntime();
+
+  jsi::Value global = rt.global();
+  jsi::Value service = global.asObject(rt).getProperty(rt, serviceName.c_str());
+  if (!service.isObject()) {
+    context->throwJsException("JavaScript global called " + serviceName + " is missing or not an object");
+    return jsi::Value::undefined();
   }
 
-  JS_FreeValue(jsContext, arguments[0]);
-  JS_FreeValue(jsContext, jsResult);
-  JS_FreeValue(jsContext, thisPointer);
-  JS_FreeValue(jsContext, global);
-
-  return javaResult;
-}
-
-jboolean InboundCallChannel::disconnect(Context *context, JNIEnv* env, jstring instanceName) const {
-  JSContext *jsContext = context->jsContext;
-  JSValue global = JS_GetGlobalObject(jsContext);
-  JSValue thisPointer = JS_GetProperty(jsContext, global, nameAtom);
-  JSValueConst arguments[1];
-  arguments[0] = context->toJsString(env, instanceName);
-
-  JSValue jsResult = JS_Invoke(jsContext, thisPointer, context->disconnectAtom, 1, arguments);
-  jboolean javaResult;
-  auto tag = JS_VALUE_GET_NORM_TAG(jsResult);
-  if (tag == JS_TAG_EXCEPTION) {
-    context->throwJsException(env, jsResult);
-    javaResult = JNI_FALSE;
-  } else if (tag == JS_TAG_BOOL) {
-    javaResult = static_cast<jboolean>(JS_VALUE_GET_BOOL(jsResult));
-  } else {
-    assert(false); // Unexpected tag.
+  jsi::Object serviceObj = service.asObject(rt);
+  jsi::Value method = serviceObj.getProperty(rt, methodName.c_str());
+  if (!method.isObject() || !method.asObject(rt).isFunction(rt)) {
+    context->throwJsException("JavaScript global called " + serviceName + " has no function " + methodName);
+    return jsi::Value::undefined();
   }
 
-  JS_FreeValue(jsContext, arguments[0]);
-  JS_FreeValue(jsContext, thisPointer);
-  JS_FreeValue(jsContext, global);
+  jsi::Value jsArg = context->toJsString(cppArg);
 
-  return javaResult;
+  return method.asObject(rt).asFunction(rt).callWithThis(
+      static_cast<jsi::IRuntime&>(rt),
+      serviceObj,
+      jsArg);
+}
+
+}  // namespace
+
+InboundCallChannel::InboundCallChannel(std::string name) : name_(std::move(name)) {}
+
+std::string InboundCallChannel::call(ContextBase* context, const std::string& callJson) const {
+  jsi::Value result;
+  try {
+    result = invokeServiceMethod(context, name_, "call", callJson);
+  } catch (const jsi::JSError& e) {
+    context->throwJsError(const_cast<jsi::JSError&>(e));
+    return "";
+  }
+  if (!result.isString()) {
+    context->throwJsException("InboundCallChannel.call result was not a string");
+    return "";
+  }
+  return context->toCppString(result.asString(context->getRuntime()));
+}
+
+bool InboundCallChannel::disconnect(ContextBase* context, const std::string& instanceName) const {
+  jsi::Value result;
+  try {
+    result = invokeServiceMethod(context, name_, "disconnect", instanceName);
+  } catch (const jsi::JSError& e) {
+    context->throwJsError(const_cast<jsi::JSError&>(e));
+    return false;
+  }
+  if (!result.isBool()) {
+    context->throwJsException("InboundCallChannel.disconnect result was not a boolean");
+    return false;
+  }
+  return result.asBool();
 }

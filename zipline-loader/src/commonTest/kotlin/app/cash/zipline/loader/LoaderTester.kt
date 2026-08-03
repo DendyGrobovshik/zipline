@@ -124,7 +124,7 @@ class LoaderTester(
   ): String {
     val success =
       load(applicationName, seed, count = 1, freshnessChecker).first() as LoadResult.Success
-    val log = success.zipline.quickJs.evaluate("globalThis.log", "assert.js") as String
+    val log = success.zipline.jsEngine.evaluate("globalThis.log", "assert.js") as String
     return log.removeSuffix(" loaded\n")
   }
 
@@ -160,7 +160,7 @@ class LoaderTester(
     seed: String,
   ): String {
     val success = deprecatedLoad(applicationName, seed, count = 1).first() as LoadResult.Success
-    val log = success.zipline.quickJs.evaluate("globalThis.log", "assert.js") as String
+    val log = success.zipline.jsEngine.evaluate("globalThis.log", "assert.js") as String
     return log.removeSuffix(" loaded\n")
   }
 
@@ -223,7 +223,7 @@ class LoaderTester(
 
     loadZiplineFromLastResult(applicationName, manifestUrl)
 
-    return (zipline.quickJs.evaluate("globalThis.log", "assert.js") as String).removeSuffix(
+    return (zipline.jsEngine.evaluate("globalThis.log", "assert.js") as String).removeSuffix(
       " loaded\n",
     )
   }
@@ -263,7 +263,7 @@ class LoaderTester(
 
     loadZiplineFromLastResult(applicationName, manifestUrl)
 
-    return (zipline.quickJs.evaluate("globalThis.log", "assert.js") as String).removeSuffix(
+    return (zipline.jsEngine.evaluate("globalThis.log", "assert.js") as String).removeSuffix(
       " loaded\n",
     )
   }
@@ -293,7 +293,7 @@ class LoaderTester(
 
     loadZiplineFromLastResult(applicationName, manifestUrl)
 
-    return (zipline.quickJs.evaluate("globalThis.log", "assert.js") as String).removeSuffix(
+    return (zipline.jsEngine.evaluate("globalThis.log", "assert.js") as String).removeSuffix(
       " loaded\n",
     )
   }
@@ -328,7 +328,7 @@ class LoaderTester(
 
     loadZiplineFromLastResult(applicationName, manifestUrl)
 
-    return (zipline.quickJs.evaluate("globalThis.log", "assert.js") as String).removeSuffix(
+    return (zipline.jsEngine.evaluate("globalThis.log", "assert.js") as String).removeSuffix(
       " loaded\n",
     )
   }
@@ -356,7 +356,7 @@ class LoaderTester(
 
     loadZiplineFromLastResult(applicationName, manifestUrl)
 
-    val loadedOutput = zipline.quickJs.evaluate("globalThis.log", "assert.js") as String
+    val loadedOutput = zipline.jsEngine.evaluate("globalThis.log", "assert.js") as String
     return loadedOutput.removeSuffix(" loaded\n")
   }
 
@@ -378,12 +378,12 @@ class LoaderTester(
     )
 
     loadZiplineFromLastResult(applicationName, manifestUrl) {
-      val loadedSeed = (it.quickJs.evaluate("globalThis.log", "assert.js") as String)
+      val loadedSeed = (it.jsEngine.evaluate("globalThis.log", "assert.js") as String)
         .removeSuffix(" loaded\n")
       if (loadedSeed == seed) throw IllegalArgumentException("Zipline code run failed")
     }
 
-    return (zipline.quickJs.evaluate("globalThis.log", "assert.js") as String)
+    return (zipline.jsEngine.evaluate("globalThis.log", "assert.js") as String)
       .removeSuffix(" loaded\n")
   }
 

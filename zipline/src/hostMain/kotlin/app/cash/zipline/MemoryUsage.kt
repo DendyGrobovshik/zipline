@@ -15,56 +15,43 @@
  */
 package app.cash.zipline
 
-/** Introspect QuickJS for its current memory usage. */
+/**
+ * Introspect the Hermes runtime for its current memory usage. Fields mirror
+ * the `hermes_*` keys of `facebook::jsi::Instrumentation::getHeapInfo`.
+ */
 @EngineApi
 data class MemoryUsage(
-  /** Memory allocated. */
-  val memoryAllocatedCount: Long,
-  val memoryAllocatedSize: Long,
-  val memoryAllocatedLimit: Long,
+  /** Bytes reserved by the GC heap (`hermes_heapSize`). */
+  val heapSize: Long,
 
-  /** Memory used. */
-  val memoryUsedCount: Long,
-  val memoryUsedSize: Long,
+  /** Bytes of live JS heap objects (`hermes_allocatedBytes`). */
+  val allocatedBytes: Long,
 
-  /** Atoms. */
-  val atomsCount: Long,
-  val atomsSize: Long,
+  /** Cumulative bytes allocated over the runtime lifetime (`hermes_totalAllocatedBytes`). */
+  val totalAllocatedBytes: Long,
 
-  /** Strings. */
-  val stringsCount: Long,
-  val stringsSize: Long,
+  /** Virtual address space of the heap (`hermes_va`). */
+  val va: Long,
 
-  /** Objects. */
-  val objectsCount: Long,
-  val objectsSize: Long,
+  /** Memory associated with JS objects but allocated outside the GC heap (`hermes_externalBytes`). */
+  val externalBytes: Long,
 
-  /** Properties. */
-  val propertiesCount: Long,
-  val propertiesSize: Long,
+  /** Estimate of malloc memory attributable to the runtime (`hermes_mallocSizeEstimate`). */
+  val mallocSizeEstimate: Long,
 
-  /** Shapes. */
-  val shapeCount: Long,
-  val shapeSize: Long,
+  /** High-water mark of [allocatedBytes] (`hermes_peakAllocatedBytes`). */
+  val peakAllocatedBytes: Long,
 
-  /** Bytecode functions. */
-  val jsFunctionsCount: Long,
-  val jsFunctionsSize: Long,
-  val jsFunctionsCodeSize: Long,
-  val jsFunctionsLineNumberTablesCount: Long,
-  val jsFunctionsLineNumberTablesSize: Long,
+  /** High-water mark of live bytes measured just after a GC (`hermes_peakLiveAfterGC`). */
+  val peakLiveAfterGC: Long,
 
-  /** C functions. */
-  val cFunctionsCount: Long,
+  /** Total GC collections so far (`hermes_numCollections`). */
+  val numCollections: Long,
 
-  /** Arrays. */
-  val arraysCount: Long,
-
-  /** Fast arrays. */
-  val fastArraysCount: Long,
-  val fastArraysElementsCount: Long,
-
-  /** Binary objects. */
-  val binaryObjectsCount: Long,
-  val binaryObjectsSize: Long,
-)
+  /** Times the GC mark stack overflowed (`hermes_numMarkStackOverflows`). */
+  val numMarkStackOverflows: Long,
+) {
+  /** Best-effort total footprint: live heap plus out-of-heap malloc memory. */
+  val usedBytes: Long
+    get() = allocatedBytes + mallocSizeEstimate + externalBytes
+}

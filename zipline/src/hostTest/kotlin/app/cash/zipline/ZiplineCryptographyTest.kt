@@ -38,7 +38,7 @@ class ZiplineCryptographyTest {
   @OptIn(ExperimentalCoroutinesApi::class)
   private val dispatcher = UnconfinedTestDispatcher()
   private val zipline = Zipline.create(dispatcher)
-  private val quickjs = zipline.quickJs
+  private val js = zipline.jsEngine
 
   @BeforeTest
   fun setUp() = runBlocking(dispatcher) {
@@ -61,7 +61,7 @@ class ZiplineCryptographyTest {
 
     zipline.installCryptographyServiceInternal(fakeZiplineCryptographyService)
 
-    quickjs.evaluate("testing.app.cash.zipline.testing.prepareRandomStringMaker()")
+    js.evaluate("testing.app.cash.zipline.testing.prepareRandomStringMaker()")
     val randomStringMaker = zipline.take<RandomStringMaker>("randomStringMaker")
     assertThat(randomStringMaker.randomString()).isEqualTo("[1, 2, 3, 4, 5]")
   }
@@ -71,7 +71,7 @@ class ZiplineCryptographyTest {
     if (isLinux) return@runBlocking
     zipline.installCryptographyService()
 
-    quickjs.evaluate("testing.app.cash.zipline.testing.prepareRandomStringMaker()")
+    js.evaluate("testing.app.cash.zipline.testing.prepareRandomStringMaker()")
     val randomStringMaker = zipline.take<RandomStringMaker>("randomStringMaker")
     val randomString = randomStringMaker.randomString()
     assertThat(randomString).matches(Regex("""\[(-?\d+, ){4}-?\d+]"""))

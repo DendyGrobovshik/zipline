@@ -1,5 +1,6 @@
 [versions]
 androidx-compose = "1.10.2"
+androidxCollectionJs = "1.6.0-alpha01-js-0.2"
 compileSdk = "36"
 jetty = "12.1.9"
 kotlin = "2.3.21"
@@ -18,6 +19,7 @@ androidx-activity-compose = { module = "androidx.activity:activity-compose", ver
 androidx-annotation = { module = "androidx.annotation:annotation", version = "1.9.1" }
 androidx-appCompat = { module = "androidx.appcompat:appcompat", version = "1.7.1" }
 androidx-compose-material = { module = "androidx.compose.material:material", version.ref = "androidx-compose" }
+androidxCollectionJs = { module = "io.github.tret9:collection", version.ref = "androidxCollectionJs" } # JS-optimized androidx.collection (with C intrinsics)
 androidx-compose-ui = { module = "androidx.compose.ui:ui", version.ref = "androidx-compose" }
 androidx-compose-ui-tooling = { module = "androidx.compose.ui:ui-tooling", version.ref = "androidx-compose" }
 androidx-compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview", version.ref = "androidx-compose" }

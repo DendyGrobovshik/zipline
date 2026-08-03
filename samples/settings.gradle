@@ -22,6 +22,5 @@ includeBuild('..') {
     substitute module("io.github.tret9:zipline-gradle-plugin") using project(":zipline-gradle-plugin")
     substitute module("io.github.tret9:zipline-kotlin-plugin") using project(":zipline-kotlin-plugin")
     substitute module("io.github.tret9:zipline-loader") using project(":zipline-loader")
-    substitute module("io.github.tret9:zipline-profiler") using project(":zipline-profiler")
   }
 }

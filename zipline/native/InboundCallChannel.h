@@ -13,26 +13,29 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef QUICKJS_ANDROID_INBOUNDCALLCHANNEL_H
-#define QUICKJS_ANDROID_INBOUNDCALLCHANNEL_H
+#ifndef ZIPLINE_HERMES_INBOUNDCALLCHANNEL_H
+#define ZIPLINE_HERMES_INBOUNDCALLCHANNEL_H
 
-#include <jni.h>
-#include <vector>
+#include "hermes-core.h"
+
+#include <jsi/jsi.h>
 #include <string>
-#include "quickjs/quickjs.h"
 
-class Context;
+namespace facebook {
+namespace jsi {
+class Runtime;
+}
+}  // namespace facebook
 
 class InboundCallChannel {
-public:
-  InboundCallChannel(JSContext *jsContext, const char *name);
-  ~InboundCallChannel();
+ public:
+  explicit InboundCallChannel(std::string name);
 
-  jstring call(Context *context, JNIEnv* env, jstring callJson) const;
-  jboolean disconnect(Context *context, JNIEnv* env, jstring instanceName) const;
+  std::string call(ContextBase* context, const std::string& callJson) const;
+  bool disconnect(ContextBase* context, const std::string& instanceName) const;
 
-  JSContext *jsContext;
-  JSAtom nameAtom;
+ private:
+  std::string name_;
 };
 
-#endif //QUICKJS_ANDROID_INBOUNDCALLCHANNEL_H
+#endif  // ZIPLINE_HERMES_INBOUNDCALLCHANNEL_H

@@ -15,12 +15,8 @@
  */
 package app.cash.zipline.cli
 
-import app.cash.zipline.QuickJs
+import app.cash.zipline.JsEngine
 import app.cash.zipline.ZiplineManifest
-import app.cash.zipline.bytecode.SourceMap
-import app.cash.zipline.bytecode.applySourceMapToBytecode
-import app.cash.zipline.bytecode.clean
-import app.cash.zipline.bytecode.stripLineNumbers
 import app.cash.zipline.loader.CURRENT_ZIPLINE_VERSION
 import app.cash.zipline.loader.ManifestSigner
 import app.cash.zipline.loader.ZiplineFile
@@ -110,19 +106,14 @@ internal class ZiplineCompiler(
     val outputZiplineFilePath = jsFile.nameWithoutExtension + ZIPLINE_EXTENSION
     val outputZiplineFile = File(outputDir.path, outputZiplineFilePath)
 
-    val quickJs = QuickJs.create()
-    quickJs.use {
-      var bytecode = quickJs.compile(jsFile.readText(), jsFile.name)
+    val jsEngine = JsEngine.create()
+    jsEngine.use {
+      val sourceMap = if (jsSourceMapFile.exists()) jsSourceMapFile.readText() else null
+      val bytecode = jsEngine.compile(jsFile.readText(), jsFile.name, sourceMap)
 
-      if (jsSourceMapFile.exists()) {
-        // Rewrite the bytecode with source line numbers.
-        val sourceMap = SourceMap.parse(jsSourceMapFile.readText()).clean()
-        bytecode = applySourceMapToBytecode(bytecode, sourceMap)
-      }
-
-      if (stripLineNumbers) {
-        bytecode = stripLineNumbers(bytecode)
-      }
+      // NOTE: stripLineNumbers is currently ignored — the QuickJS-era
+      // implementation operated on QuickJS bytecode and has no Hermes
+      // equivalent (the zipline-bytecode module was removed).
 
       val ziplineFile = ZiplineFile(CURRENT_ZIPLINE_VERSION, bytecode.toByteString())
       val sha256 = outputZiplineFile.sink().use { fileSink ->
@@ -133,7 +124,7 @@ internal class ZiplineCompiler(
         hashingSink.hash
       }
 
-      val dependencies = collectDependencies(quickJs, bytecode)
+      val dependencies = collectDependencies(jsEngine, bytecode)
 
       return "$MODULE_PATH_PREFIX${jsFile.name}" to ZiplineManifest.Module(
         url = outputZiplineFilePath,
@@ -166,9 +157,9 @@ internal class ZiplineCompiler(
   private val manifestFileName = app.cash.zipline.loader.internal.MANIFEST_FILE_NAME
 
   @Suppress("INVISIBLE_REFERENCE", "INVISIBLE_MEMBER") // Access :zipline internals.
-  private fun collectDependencies(quickJs: QuickJs, bytecode: ByteArray): List<String> {
-    app.cash.zipline.internal.collectModuleDependencies(quickJs)
-    quickJs.execute(bytecode)
-    return app.cash.zipline.internal.getModuleDependencies(quickJs)
+  private fun collectDependencies(jsEngine: JsEngine, bytecode: ByteArray): List<String> {
+    app.cash.zipline.internal.collectModuleDependencies(jsEngine)
+    jsEngine.execute(bytecode)
+    return app.cash.zipline.internal.getModuleDependencies(jsEngine)
   }
 }

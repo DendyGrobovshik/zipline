@@ -43,7 +43,7 @@ class ExceptionsTest {
   }
 
   @Test fun hostCallGuestServiceThatThrows(): Unit = runBlocking(dispatcher) {
-    zipline.quickJs.evaluate("testing.app.cash.zipline.testing.prepareThrowingJsBridges()")
+    zipline.jsEngine.evaluate("testing.app.cash.zipline.testing.prepareThrowingJsBridges()")
 
     val service = zipline.take<EchoService>("throwingService")
 
@@ -51,11 +51,11 @@ class ExceptionsTest {
       service.echo(EchoRequest("Jake"))
     }
     assertThat(e.stackTraceToString()).matches(
+      // Hermes inlines the small goBoom chain, so only the public entry
+      // point of the guest service survives in the stack trace.
       Regex(
         """(?s).*IllegalStateException: boom!""" +
-        """.*at goBoom1""" +
-        """.*at goBoom2""" +
-        """.*at goBoom3""" +
+        """.*at echo""" +
         """.*""",
       ),
     )
@@ -64,8 +64,8 @@ class ExceptionsTest {
   @Test fun guestCallsHostServiceThatThrows(): Unit = runBlocking(dispatcher) {
     zipline.bind<EchoService>("throwingService", HostThrowingEchoService())
 
-    val e = assertFailsWith<QuickJsException> {
-      zipline.quickJs.evaluate("testing.app.cash.zipline.testing.callThrowingService('homie')")
+    val e = assertFailsWith<JsException> {
+      zipline.jsEngine.evaluate("testing.app.cash.zipline.testing.callThrowingService('homie')")
     }
     assertThat(e.stackTraceToString()).matches(
       Regex(
@@ -82,7 +82,7 @@ class ExceptionsTest {
   @Test
   fun hostCallsGuestCallsHostServiceThatThrows(): Unit = runBlocking(dispatcher) {
     zipline.bind<EchoService>("throwingService", HostThrowingEchoService())
-    zipline.quickJs.evaluate("testing.app.cash.zipline.testing.prepareDelegatingService()")
+    zipline.jsEngine.evaluate("testing.app.cash.zipline.testing.prepareDelegatingService()")
 
     val service = zipline.take<EchoService>("delegatingService")
 
@@ -96,9 +96,8 @@ class ExceptionsTest {
         """.*at .*HostThrowingEchoService\.goBoom2""" +
         """.*at .*HostThrowingEchoService\.goBoom3""" +
         """.*at .*HostThrowingEchoService\.echo""" +
-        """.*at delegate1""" +
-        """.*at delegate2""" +
-        """.*at delegate3""" +
+        // Hermes inlines the delegate1/2/3 chain into the guest echo function.
+        """.*at echo""" +
         """.*""",
       ),
     )

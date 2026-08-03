@@ -14,27 +14,31 @@
  * limitations under the License.
  */
 #include "ExceptionThrowers.h"
-#include "Context.h"
+#include "JniUtf8.h"
 
-void throwJavaException(JNIEnv *env, const char *exceptionClass, const char *fmt, ...) {
+#include <cstdarg>
+#include <cstdio>
+
+#include "ContextJni.h"
+
+void throwJavaException(JNIEnv* env, const char* exceptionClass, const char* fmt, ...) {
   char msg[512];
   va_list args;
-  va_start (args, fmt);
+  va_start(args, fmt);
   vsnprintf(msg, sizeof(msg), fmt, args);
-  va_end (args);
+  va_end(args);
   env->ThrowNew(env->FindClass(exceptionClass), msg);
 }
 
-void throwJsExceptionFmt(JNIEnv *env, const Context *context, const char *fmt, ...) {
+void throwJsExceptionFmt(JNIEnv* env, const ContextJni* context, const char* fmt, ...) {
   char msg[512];
   va_list args;
-  va_start (args, fmt);
+  va_start(args, fmt);
   vsnprintf(msg, sizeof(msg), fmt, args);
-  va_end (args);
-  jobject exception = env->NewObject(context->quickJsExceptionClass,
-                                     context->quickJsExceptionConstructor,
-                                     env->NewStringUTF(msg),
-                                     NULL);
+  va_end(args);
+  jobject exception = env->NewObject(context->jsExceptionClass,
+                                     context->jsExceptionConstructor,
+                                     zipline::utf8ToJniString(env, msg),
+                                     nullptr);
   env->Throw(static_cast<jthrowable>(exception));
 }
-

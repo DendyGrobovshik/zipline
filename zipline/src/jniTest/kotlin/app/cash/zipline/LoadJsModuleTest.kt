@@ -48,7 +48,7 @@ class LoadJsModuleTest {
       }));
       """.trimIndent()
     zipline.loadJsModule(moduleJs, "example")
-    assertThat(zipline.quickJs.evaluate("JSON.stringify(require('example'))"))
+    assertThat(zipline.jsEngine.evaluate("JSON.stringify(require('example'))"))
       .isEqualTo("""{"someValue":4321}""")
   }
 
@@ -70,7 +70,7 @@ class LoadJsModuleTest {
       });
       """.trimIndent()
     zipline.loadJsModule(moduleJs, "example")
-    assertThat(zipline.quickJs.evaluate("JSON.stringify(require('example'))"))
+    assertThat(zipline.jsEngine.evaluate("JSON.stringify(require('example'))"))
       .isEqualTo("""{"someValue":1234}""")
   }
 
@@ -82,9 +82,9 @@ class LoadJsModuleTest {
         };
       });
       """.trimIndent()
-    val bytecode = zipline.quickJs.compile(moduleJs, "example.js")
+    val bytecode = zipline.jsEngine.compile(moduleJs, "example.js")
     zipline.loadJsModule(bytecode, "example")
-    assertThat(zipline.quickJs.evaluate("JSON.stringify(require('example'))"))
+    assertThat(zipline.jsEngine.evaluate("JSON.stringify(require('example'))"))
       .isEqualTo("""{"bytecodeValue":5678}""")
   }
 }

@@ -39,7 +39,11 @@ internal actual fun detectLeaks() {
 internal actual fun stopTrackingLeaks(
   endpoint: Endpoint,
 ) {
-  allReferencesSet.removeAll { it.endpoint == endpoint }
+  // Iteration is not atomic even on a synchronizedSet; concurrent close()
+  // calls on different Zipline instances race here otherwise.
+  synchronized(allReferencesSet) {
+    allReferencesSet.removeAll { it.endpoint == endpoint }
+  }
 }
 
 /** Keep every [ZiplineServiceReference] reachable until its target is GC'd. */

@@ -1,0 +1,153 @@
+(function (root, factory) {
+  if (typeof define === 'function' && define.amd)
+    define(['exports'], factory);
+  else if (typeof exports === 'object')
+    factory(module.exports);
+  else
+    root['demo'] = factory(typeof this['demo'] === 'undefined' ? {} : this['demo']);
+}(this, function (_) {
+  'use strict';
+  function sayHello() {
+    goBoom3();
+  }
+  function goBoom3() {
+    goBoom2();
+    var arr = [];
+    arr.push(1);
+    arr.push(2);
+    arr.push(3);
+    arr.push(4);
+    arr.push(5);
+    arr.push(6);
+    arr.push(7);
+    arr.push(8);
+    arr.push(9);
+    arr.push(10);
+    arr.push(11);
+    arr.push(12);
+    arr.push(13);
+    arr.push(14);
+    arr.push(15);
+    arr.push(16);
+    arr.push(17);
+    arr.push(18);
+    arr.push(19);
+    arr.push(20);
+    arr.push(21);
+    arr.push(22);
+    arr.push(23);
+    arr.push(24);
+    arr.push(25);
+    arr.push(26);
+    arr.push(27);
+    arr.push(28);
+    arr.push(29);
+    arr.push(30);
+    arr.push(31);
+    arr.push(32);
+    arr.push(33);
+    arr.push(34);
+    arr.push(35);
+    arr.push(36);
+    arr.push(37);
+    arr.push(38);
+    arr.push(39);
+    arr.push(40);
+    return arr.length;
+  }
+  function goBoom2() {
+    goBoom1();
+    var arr = [];
+    arr.push(1);
+    arr.push(2);
+    arr.push(3);
+    arr.push(4);
+    arr.push(5);
+    arr.push(6);
+    arr.push(7);
+    arr.push(8);
+    arr.push(9);
+    arr.push(10);
+    arr.push(11);
+    arr.push(12);
+    arr.push(13);
+    arr.push(14);
+    arr.push(15);
+    arr.push(16);
+    arr.push(17);
+    arr.push(18);
+    arr.push(19);
+    arr.push(20);
+    arr.push(21);
+    arr.push(22);
+    arr.push(23);
+    arr.push(24);
+    arr.push(25);
+    arr.push(26);
+    arr.push(27);
+    arr.push(28);
+    arr.push(29);
+    arr.push(30);
+    arr.push(31);
+    arr.push(32);
+    arr.push(33);
+    arr.push(34);
+    arr.push(35);
+    arr.push(36);
+    arr.push(37);
+    arr.push(38);
+    arr.push(39);
+    arr.push(40);
+    return arr.length;
+  }
+  function goBoom1() {
+    var arr = [];
+    arr.push(1);
+    arr.push(2);
+    arr.push(3);
+    arr.push(4);
+    arr.push(5);
+    arr.push(6);
+    arr.push(7);
+    arr.push(8);
+    arr.push(9);
+    arr.push(10);
+    arr.push(11);
+    arr.push(12);
+    arr.push(13);
+    arr.push(14);
+    arr.push(15);
+    arr.push(16);
+    arr.push(17);
+    arr.push(18);
+    arr.push(19);
+    arr.push(20);
+    arr.push(21);
+    arr.push(22);
+    arr.push(23);
+    arr.push(24);
+    arr.push(25);
+    arr.push(26);
+    arr.push(27);
+    arr.push(28);
+    arr.push(29);
+    arr.push(30);
+    arr.push(31);
+    arr.push(32);
+    arr.push(33);
+    arr.push(34);
+    arr.push(35);
+    arr.push(36);
+    arr.push(37);
+    arr.push(38);
+    arr.push(39);
+    arr.push(40);
+    throw Error('boom!');
+  }
+  _.keep3 = goBoom3;
+  _.keep2 = goBoom2;
+  _.keep1 = goBoom1;
+  _.sayHello = sayHello;
+  return _;
+}));
+//# sourceMappingURL=demo.js.map

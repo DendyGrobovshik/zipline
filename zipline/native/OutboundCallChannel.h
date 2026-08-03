@@ -13,33 +13,36 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef QUICKJS_ANDROID_OUTBOUNDCALLCHANNEL_H
-#define QUICKJS_ANDROID_OUTBOUNDCALLCHANNEL_H
+#ifndef ZIPLINE_HERMES_OUTBOUNDCALLCHANNEL_H
+#define ZIPLINE_HERMES_OUTBOUNDCALLCHANNEL_H
 
-#include <jni.h>
+#include "hermes-core.h"
+
+#include <jsi/jsi.h>
 #include <string>
-#include <vector>
-#include "quickjs/quickjs.h"
 
-class Context;
+namespace facebook {
+namespace jsi {
+class Object;
+class Runtime;
+class Value;
+}
+}  // namespace facebook
 
 class OutboundCallChannel {
-public:
-  OutboundCallChannel(Context*, JNIEnv*, const char* name, jobject object, JSValueConst jsOutboundCallChannel);
+ public:
+  OutboundCallChannel(ContextBase* context, std::string name);
+  virtual ~OutboundCallChannel();
 
-  ~OutboundCallChannel();
+  void attachToJavascript(facebook::jsi::Runtime& runtime,
+                         facebook::jsi::Object& jsObject);
 
-  static JSValue call(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
-  static JSValue disconnect(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+  virtual std::string call(const std::string& callJson) = 0;
+  virtual bool disconnect(const std::string& instanceName) = 0;
 
-private:
-  Context* context;
-  const std::string name;
-  jobject javaThis;
-  jclass callChannelClass;
-  jmethodID callMethod;
-  jmethodID disconnectMethod;
-  std::vector<JSCFunctionListEntry> functions;
+ protected:
+  ContextBase* context_;
+  std::string name_;
 };
 
-#endif //QUICKJS_ANDROID_OUTBOUNDCALLCHANNEL_H
+#endif  // ZIPLINE_HERMES_OUTBOUNDCALLCHANNEL_H

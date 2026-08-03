@@ -52,7 +52,7 @@ class ZiplineStackSizeTest {
   @Test
   fun deepRecursionDoesntCrash() {
     runBlocking(dispatcher) {
-      zipline.quickJs.evaluate("testing.app.cash.zipline.testing.prepareRecursingService()")
+      zipline.jsEngine.evaluate("testing.app.cash.zipline.testing.prepareRecursingService()")
 
       val recurseCount = 500
       val service = zipline.take<EchoService>("recursingService")
@@ -65,11 +65,11 @@ class ZiplineStackSizeTest {
   @Ignore("https://github.com/cashapp/zipline/issues/1130")
   fun veryDeepRecursionFailsGracefully() {
     runBlocking(dispatcher) {
-      zipline.quickJs.evaluate("testing.app.cash.zipline.testing.prepareRecursingService()")
+      zipline.jsEngine.evaluate("testing.app.cash.zipline.testing.prepareRecursingService()")
 
       val recurseCount = 2000
       val service = zipline.take<EchoService>("recursingService")
-      val e = assertFailsWith<QuickJsException> {
+      val e = assertFailsWith<JsException> {
         service.echo(EchoRequest("$recurseCount"))
       }
       assertThat(e.message).isEqualTo("stack overflow")

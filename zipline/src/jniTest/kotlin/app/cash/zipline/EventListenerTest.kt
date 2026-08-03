@@ -52,7 +52,7 @@ class EventListenerTest {
   }
 
   @Test fun jvmCallJsService() = runTest(dispatcher) {
-    zipline.quickJs.evaluate("testing.app.cash.zipline.testing.prepareJsBridges()")
+    zipline.jsEngine.evaluate("testing.app.cash.zipline.testing.prepareJsBridges()")
 
     val helloService = zipline.take<EchoService>("helloService")
     assertThat(helloService.echo(EchoRequest("Jake")))
@@ -74,7 +74,7 @@ class EventListenerTest {
     }
     zipline.bind<EchoService>("supService", jvmEchoService)
 
-    assertThat(zipline.quickJs.evaluate("testing.app.cash.zipline.testing.callSupService('homie')"))
+    assertThat(zipline.jsEngine.evaluate("testing.app.cash.zipline.testing.callSupService('homie')"))
       .isEqualTo("JavaScript received 'sup from the JVM, homie' from the JVM")
 
     val name = "supService"
@@ -86,8 +86,8 @@ class EventListenerTest {
   }
 
   @Test fun suspendingJvmCallJsService() = runTest(dispatcher) {
-    zipline.quickJs.evaluate("testing.app.cash.zipline.testing.prepareSuspendingJsBridges()")
-    zipline.quickJs.evaluate("testing.app.cash.zipline.testing.unblockSuspendingJs()")
+    zipline.jsEngine.evaluate("testing.app.cash.zipline.testing.prepareSuspendingJsBridges()")
+    zipline.jsEngine.evaluate("testing.app.cash.zipline.testing.unblockSuspendingJs()")
 
     val jsSuspendingEchoService = zipline.take<SuspendingEchoService>("jsSuspendingEchoService")
 
@@ -113,8 +113,8 @@ class EventListenerTest {
       jvmSuspendingEchoService,
     )
 
-    zipline.quickJs.evaluate("testing.app.cash.zipline.testing.callSuspendingEchoService('Eric')")
-    assertThat(zipline.quickJs.evaluate("testing.app.cash.zipline.testing.suspendingEchoResult"))
+    zipline.jsEngine.evaluate("testing.app.cash.zipline.testing.callSuspendingEchoService('Eric')")
+    assertThat(zipline.jsEngine.evaluate("testing.app.cash.zipline.testing.suspendingEchoResult"))
       .isEqualTo("hello from the suspending JVM, Eric")
 
     val name = "jvmSuspendingEchoService"
@@ -126,7 +126,7 @@ class EventListenerTest {
   }
 
   @Test fun jvmCallIncompatibleJsService() = runTest(dispatcher) {
-    zipline.quickJs.evaluate("testing.app.cash.zipline.testing.prepareJsBridges()")
+    zipline.jsEngine.evaluate("testing.app.cash.zipline.testing.prepareJsBridges()")
 
     val e = assertFailsWith<ZiplineApiMismatchException> {
       zipline.take<PotatoService>("helloService").echo()
@@ -152,7 +152,7 @@ class EventListenerTest {
   }
 
   @Test fun jvmCallUnknownJsService() = runTest(dispatcher) {
-    zipline.quickJs.evaluate("testing.app.cash.zipline.testing.initZipline()")
+    zipline.jsEngine.evaluate("testing.app.cash.zipline.testing.initZipline()")
 
     val e = assertFailsWith<ZiplineApiMismatchException> {
       zipline.take<EchoService>("helloService").echo(EchoRequest("hello"))
@@ -182,8 +182,8 @@ class EventListenerTest {
     }
     zipline.bind<PotatoService>("supService", jvmPotatoService)
 
-    val e = assertFailsWith<QuickJsException> {
-      zipline.quickJs.evaluate("testing.app.cash.zipline.testing.callSupService('homie')")
+    val e = assertFailsWith<JsException> {
+      zipline.jsEngine.evaluate("testing.app.cash.zipline.testing.callSupService('homie')")
     }
     assertThat(e.message!!.replace("\t", "  ")).startsWith(
       """
@@ -207,8 +207,8 @@ class EventListenerTest {
   }
 
   @Test fun jsCallUnknownJvmService() = runTest(dispatcher) {
-    val e = assertFailsWith<QuickJsException> {
-      zipline.quickJs.evaluate("testing.app.cash.zipline.testing.callSupService('homie')")
+    val e = assertFailsWith<JsException> {
+      zipline.jsEngine.evaluate("testing.app.cash.zipline.testing.callSupService('homie')")
     }
     assertThat(e.message!!.replace("\t", "  ")).startsWith(
       """
@@ -243,8 +243,8 @@ class EventListenerTest {
   @Test fun serviceToStrings() = runTest(dispatcher) {
     val outboundServiceToString =
       "SuspendingEchoService\$Companion\$Adapter\$GeneratedOutboundService"
-    zipline.quickJs.evaluate("testing.app.cash.zipline.testing.prepareSuspendingJsBridges()")
-    zipline.quickJs.evaluate("testing.app.cash.zipline.testing.unblockSuspendingJs()")
+    zipline.jsEngine.evaluate("testing.app.cash.zipline.testing.prepareSuspendingJsBridges()")
+    zipline.jsEngine.evaluate("testing.app.cash.zipline.testing.unblockSuspendingJs()")
 
     val service = zipline.take<SuspendingEchoService>("jsSuspendingEchoService")
     service.suspendingEcho(EchoRequest("Jake"))

@@ -18,10 +18,10 @@ package app.cash.zipline
 import app.cash.zipline.internal.bridge.CallChannel
 
 internal class JniCallChannel(
-  private val quickJs: QuickJs,
+  private val jsEngine: JsEngine,
   private val instance: Long,
 ) : CallChannel {
-  override fun call(callJson: String) = call(quickJs.context, instance, callJson)
+  override fun call(callJson: String) = call(jsEngine.context, instance, callJson)
 
   private external fun call(
     context: Long,
@@ -29,7 +29,7 @@ internal class JniCallChannel(
     callJson: String,
   ): String
 
-  override fun disconnect(instanceName: String): Boolean = disconnect(quickJs.context, instance, instanceName)
+  override fun disconnect(instanceName: String): Boolean = disconnect(jsEngine.context, instance, instanceName)
 
   private external fun disconnect(
     context: Long,

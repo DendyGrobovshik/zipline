@@ -137,7 +137,7 @@ class ProductionFetcherReceiverTest {
   }
 
   @Suppress("INVISIBLE_REFERENCE", "INVISIBLE_MEMBER") // Access :zipline-loader internals.
-  private fun getLog() = app.cash.zipline.internal.getLog(zipline.quickJs)
+  private fun getLog() = app.cash.zipline.internal.getLog(zipline.jsEngine)
 
   private suspend fun ZiplineLoader.loadOrFail(
     applicationName: String,

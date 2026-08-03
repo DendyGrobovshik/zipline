@@ -26,22 +26,23 @@ import kotlin.test.assertFailsWith
  * Confirm our JavaScript engine doesn't allow eval.
  */
 class NoEvalTest {
-  private val quickJs = QuickJs.create()
+  private val jsEngine = JsEngine.create()
 
   @AfterTest
   fun tearDown() {
-    quickJs.close()
+    jsEngine.close()
   }
 
   @Test
-  fun quickJsDoesNotSupportEval() {
-    // QuickJs.evaluate works
-    assertEquals(6, quickJs.evaluate("3+3", "shouldSucceed.js"))
+  fun hermesDoesNotSupportEval() {
+    // JsEngine.evaluate works
+    assertEquals(6, jsEngine.evaluate("3+3", "shouldSucceed.js"))
 
     val e = assertFailsWith<Exception> {
       // eval in JS code doesn't
-      quickJs.evaluate("eval('3+3')", "shouldFail.js")
+      jsEngine.evaluate("eval('3+3')", "shouldFail.js")
     }
-    assertThat(e.message!!).startsWith("eval is not supported")
+    // Hermes reports direct eval as a parse failure.
+    assertThat(e.message!!).startsWith("Parsing source code unsupported")
   }
 }

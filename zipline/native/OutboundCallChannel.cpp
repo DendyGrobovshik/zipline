@@ -13,87 +13,45 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <assert.h>
 #include "OutboundCallChannel.h"
-#include "Context.h"
-#include "ExceptionThrowers.h"
 
-OutboundCallChannel::OutboundCallChannel(Context* c, JNIEnv* env, const char* name, jobject object,
-                                         JSValueConst jsOutboundCallChannel)
-    : context(c),
-      name(name),
-      javaThis(env->NewGlobalRef(object)),
-      callChannelClass(static_cast<jclass>(env->NewGlobalRef(env->FindClass("app/cash/zipline/internal/bridge/CallChannel")))),
-      callMethod(env->GetMethodID(callChannelClass, "call", "(Ljava/lang/String;)Ljava/lang/String;")),
-      disconnectMethod(env->GetMethodID(callChannelClass, "disconnect", "(Ljava/lang/String;)Z")) {
-  functions.push_back(JS_CFUNC_DEF("call", 1, OutboundCallChannel::call));
-  functions.push_back(JS_CFUNC_DEF("disconnect", 1, OutboundCallChannel::disconnect));
-  if (!env->ExceptionCheck()) {
-    JS_SetPropertyFunctionList(context->jsContext, jsOutboundCallChannel, functions.data(), functions.size());
-  }
-}
+#include <jsi/jsi.h>
 
-OutboundCallChannel::~OutboundCallChannel() {
-  context->getEnv()->DeleteGlobalRef(javaThis);
-  context->getEnv()->DeleteGlobalRef(callChannelClass);
-}
+namespace jsi = facebook::jsi;
 
-JSValue
-OutboundCallChannel::call(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-  auto context = reinterpret_cast<const Context*>(JS_GetRuntimeOpaque(JS_GetRuntime(ctx)));
-  if (!context) {
-    return JS_ThrowReferenceError(ctx, "QuickJs closed");
-  }
-  auto channel = reinterpret_cast<const OutboundCallChannel*>(JS_GetOpaque(this_val, context->outboundCallChannelClassId));
-  if (!channel) {
-    return JS_ThrowReferenceError(ctx, "Not an OutboundCallChannel");
-  }
+OutboundCallChannel::OutboundCallChannel(ContextBase* context, std::string name)
+    : context_(context), name_(std::move(name)) {}
 
-  assert(argc == 1);
+OutboundCallChannel::~OutboundCallChannel() = default;
 
-  auto env = context->getEnv();
-  env->PushLocalFrame(argc + 1);
-  jvalue args[1];
-  args[0].l = context->toJavaString(env, argv[0]);
+void OutboundCallChannel::attachToJavascript(jsi::Runtime& runtime, jsi::Object& jsObject) {
+  jsi::Object callFn = jsi::Function::createFromHostFunction(
+      runtime,
+      jsi::PropNameID::forUtf8(runtime, "call"),
+      1,
+      [this](jsi::Runtime& rt, const jsi::Value& thisVal,
+             const jsi::Value* args, size_t argc) -> jsi::Value {
+        if (argc < 1 || !args[0].isString()) {
+          throw jsi::JSError(rt, "OutboundCallChannel.call expects a string argument");
+        }
+        std::string arg = args[0].asString(rt).utf8(rt);
+        std::string result = call(arg);
+        return jsi::String::createFromUtf8(rt, result);
+      });
+  jsObject.setProperty(runtime, "call", callFn);
 
-  jstring javaResult = static_cast<jstring>(env->CallObjectMethodA(
-      channel->javaThis, channel->callMethod, args));
-  JSValue jsResult;
-  if (!env->ExceptionCheck()) {
-    jsResult = context->toJsString(env, javaResult);
-  } else {
-    jsResult = context->throwJavaExceptionFromJs(env);
-  }
-  env->PopLocalFrame(nullptr);
-  return jsResult;
-}
-
-JSValue
-OutboundCallChannel::disconnect(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-  auto context = reinterpret_cast<const Context*>(JS_GetRuntimeOpaque(JS_GetRuntime(ctx)));
-  if (!context) {
-    return JS_ThrowReferenceError(ctx, "QuickJs closed");
-  }
-  auto channel = reinterpret_cast<const OutboundCallChannel*>(JS_GetOpaque(this_val, context->outboundCallChannelClassId));
-  if (!channel) {
-    return JS_ThrowReferenceError(ctx, "Not an OutboundCallChannel");
-  }
-
-  assert(argc == 1);
-
-  auto env = context->getEnv();
-  env->PushLocalFrame(argc + 1);
-  jvalue args[1];
-  args[0].l = context->toJavaString(env, argv[0]);
-
-  jboolean javaResult = env->CallBooleanMethodA(
-      channel->javaThis, channel->disconnectMethod, args);
-  JSValue jsResult;
-  if (!env->ExceptionCheck()) {
-    jsResult = JS_NewBool(context->jsContext, javaResult);
-  } else {
-    jsResult = context->throwJavaExceptionFromJs(env);
-  }
-  env->PopLocalFrame(nullptr);
-  return jsResult;
+  jsi::Object disconnectFn = jsi::Function::createFromHostFunction(
+      runtime,
+      jsi::PropNameID::forUtf8(runtime, "disconnect"),
+      1,
+      [this](jsi::Runtime& rt, const jsi::Value& thisVal,
+             const jsi::Value* args, size_t argc) -> jsi::Value {
+        if (argc < 1 || !args[0].isString()) {
+          throw jsi::JSError(rt, "OutboundCallChannel.disconnect expects a string argument");
+        }
+        std::string arg = args[0].asString(rt).utf8(rt);
+        bool result = disconnect(arg);
+        return jsi::Value(rt, result);
+      });
+  jsObject.setProperty(runtime, "disconnect", disconnectFn);
 }

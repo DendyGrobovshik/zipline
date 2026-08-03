@@ -25,6 +25,7 @@ import assertk.assertions.isEqualTo
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import org.junit.After
+import org.junit.Ignore
 import org.junit.Before
 import org.junit.Test
 
@@ -43,7 +44,7 @@ class LeakedServicesTest {
   }
 
   @Test fun jvmLeaksService() = runTest(dispatcher) {
-    zipline.quickJs.evaluate("testing.app.cash.zipline.testing.prepareJsBridges()")
+    zipline.jsEngine.evaluate("testing.app.cash.zipline.testing.prepareJsBridges()")
     val name = "helloService"
     val leakWatcher = LeakWatcher<EchoService> {
       zipline.take(name) // Deliberately not closed for testing.
@@ -54,6 +55,7 @@ class LeakedServicesTest {
     assertThat(eventListener.take()).isEqualTo("serviceLeaked $name")
   }
 
+  @Ignore("Depends on FinalizationRegistry-based leak tracking, unsupported on Hermes")
   @Test fun jsLeaksService() = runTest(dispatcher) {
     val supService = object : EchoService {
       override fun echo(request: EchoRequest): EchoResponse = error("unexpected call")
@@ -61,8 +63,8 @@ class LeakedServicesTest {
 
     val name = "supService"
     zipline.bind<EchoService>(name, supService)
-    zipline.quickJs.evaluate("testing.app.cash.zipline.testing.allocateAndLeakService()")
-    zipline.quickJs.evaluate("testing.app.cash.zipline.testing.triggerLeakDetection()")
+    zipline.jsEngine.evaluate("testing.app.cash.zipline.testing.allocateAndLeakService()")
+    zipline.jsEngine.evaluate("testing.app.cash.zipline.testing.triggerLeakDetection()")
     assertThat(eventListener.take()).isEqualTo("bindService $name")
     assertThat(eventListener.take()).isEqualTo("serviceLeaked $name")
   }

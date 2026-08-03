@@ -52,7 +52,6 @@ android {
 dependencies {
   implementation("io.github.tret9:zipline")
   implementation("io.github.tret9:zipline-loader")
-  implementation("io.github.tret9:zipline-profiler")
   implementation(projects.samples.worldClock.presenters)
   implementation(libs.android.material)
   implementation(libs.androidx.activity.compose)

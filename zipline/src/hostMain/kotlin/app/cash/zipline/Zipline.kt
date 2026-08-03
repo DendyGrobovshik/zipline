@@ -44,7 +44,7 @@ import kotlinx.serialization.modules.SerializersModule
 
 actual class Zipline private constructor(
   @property:EngineApi
-  val quickJs: QuickJs,
+  val jsEngine: JsEngine,
   userSerializersModule: SerializersModule,
   dispatcher: CoroutineDispatcher,
   private val scope: CoroutineScope,
@@ -57,7 +57,7 @@ actual class Zipline private constructor(
     outboundChannel = object : CallChannel {
       /** Lazily fetch the channel to call into JS. */
       private val jsInboundBridge: CallChannel by lazy(mode = LazyThreadSafetyMode.NONE) {
-        quickJs.getInboundChannel()
+        jsEngine.getInboundChannel()
       }
 
       override fun call(callJson: String): String {
@@ -91,7 +91,9 @@ actual class Zipline private constructor(
 
   init {
     // Eagerly publish the channel so the guest can call us.
-    quickJs.initOutboundChannel(endpoint.inboundChannel)
+    jsEngine.initOutboundChannel(endpoint.inboundChannel)
+    jsEngine.initRdmaChangesChannel()
+
 
     val eventLoop = CoroutineEventLoop(dispatcher, scope, guest)
 
@@ -137,7 +139,7 @@ actual class Zipline private constructor(
    * calling close:
    *
    *  * Call [take] or [bind].
-   *  * Accessing [quickJs].
+   *  * Accessing [jsEngine].
    *  * Accessing the objects returned from [take].
    */
   override fun close() {
@@ -181,7 +183,7 @@ actual class Zipline private constructor(
       }
     }
 
-    quickJs.close()
+    jsEngine.close()
 
     // Don't wait for a JS continuation to resume, it never will. Canceling `scope` doesn't do this
     // because each continuation is in its caller's scope.
@@ -198,11 +200,11 @@ actual class Zipline private constructor(
   }
 
   fun loadJsModule(script: String, id: String) {
-    loadJsModule(quickJs, script, id)
+    loadJsModule(jsEngine, script, id)
   }
 
   fun loadJsModule(bytecode: ByteArray, id: String) {
-    loadJsModule(quickJs, id, bytecode)
+    loadJsModule(jsEngine, id, bytecode)
   }
 
   actual fun <T : Any> getOrPutAttachment(key: KClass<T>, compute: () -> T): T {
@@ -216,15 +218,11 @@ actual class Zipline private constructor(
       serializersModule: SerializersModule = EmptySerializersModule(),
       eventListener: EventListener = EventListener.NONE,
     ): Zipline {
-      val quickJs = QuickJs.create()
-      // The default stack size is 256 KiB. QuickJS is not graceful when the stack size is exceeded
-      // so we set a high limit so it only fails on definitely buggy code, not just recursive code.
-      // Expect callers to use 8 MiB stack sizes for their calling threads.
-      quickJs.maxStackSize = 6 * 1024 * 1024L
-      initModuleLoader(quickJs)
+      val jsEngine = JsEngine.create()
+      initModuleLoader(jsEngine)
 
       val scope = CoroutineScope(dispatcher)
-      val result = Zipline(quickJs, serializersModule, dispatcher, scope, eventListener)
+      val result = Zipline(jsEngine, serializersModule, dispatcher, scope, eventListener)
       eventListener.ziplineCreated(result)
       return result
     }

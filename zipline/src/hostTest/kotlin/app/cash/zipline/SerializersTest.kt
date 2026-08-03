@@ -68,7 +68,7 @@ class SerializersTest {
 
   @Test fun presentGetSerializersSucceeds() = runBlocking(dispatcher) {
     val service = zipline.take<AdaptersService>("adaptersService")
-    zipline.quickJs.evaluate("testing.app.cash.zipline.testing.prepareAdaptersJsBridges()")
+    zipline.jsEngine.evaluate("testing.app.cash.zipline.testing.prepareAdaptersJsBridges()")
 
     assertThat(service.echo(AdaptersRequest("Andrew")))
       .isEqualTo(AdaptersResponse("thank you for using your serializers, Andrew"))
@@ -100,7 +100,7 @@ class SerializersTest {
       "adaptersService",
       HostAdaptersService(),
     )
-    assertThat(zipline.quickJs.evaluate("testing.app.cash.zipline.testing.callAdaptersService()"))
+    assertThat(zipline.jsEngine.evaluate("testing.app.cash.zipline.testing.callAdaptersService()"))
       .isEqualTo("JavaScript received nice adapters, Jesse")
   }
 

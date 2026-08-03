@@ -33,6 +33,6 @@ class ADummyTest {
 
   @Test fun run() {
     zipline.loadTestingJs()
-    zipline.quickJs.evaluate("testing.app.cash.zipline.testing.initZipline()")
+    zipline.jsEngine.evaluate("testing.app.cash.zipline.testing.initZipline()")
   }
 }

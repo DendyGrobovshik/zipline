@@ -1,0 +1,8 @@
+# Header and include paths live in zipline/build.gradle.kts (the cinterop
+# DSL), because paths in this def file are not resolved relative to the def
+# file and absolute paths here would break other machines. The `-L` library
+# search path is also supplied by build.gradle.kts for the same reason.
+package = app.cash.zipline.hermes
+linkerOpts.linux = -lhermesvm -lpthread -ldl
+linkerOpts.macos = -lhermesvm -framework Foundation
+linkerOpts.ios = -lhermesvm -framework Foundation

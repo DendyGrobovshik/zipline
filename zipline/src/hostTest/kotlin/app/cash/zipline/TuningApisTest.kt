@@ -17,66 +17,38 @@ package app.cash.zipline
 
 import kotlin.test.AfterTest
 import kotlin.test.Test
-import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class TuningApisTest {
-  private val quickjs = QuickJs.create()
+  private val js = JsEngine.create()
 
   @AfterTest fun tearDown() {
-    quickjs.close()
+    js.close()
   }
 
-  @Test fun defaults() {
-    // TODO remove this test once jniMain and nativeMain share initial value config in hostMain.
-    assertEquals(-1, quickjs.memoryLimit)
-    assertEquals(256L * 1024L, quickjs.gcThreshold)
-    assertEquals(512L * 1024L, quickjs.maxStackSize)
-  }
-
-  @Test fun setMemoryLimit() {
-    val value = 1024L * 1024L + 1L
-    quickjs.memoryLimit = value
-    assertEquals(value, quickjs.memoryLimit)
-    assertEquals(value, quickjs.memoryUsage.memoryAllocatedLimit)
-  }
-
-  @Test fun setGcThreshold() {
-    val value = 1024L * 1024L + 2L
-    quickjs.gcThreshold = value
-    assertEquals(value, quickjs.gcThreshold)
-  }
-
-  @Test fun setMaxStackSize() {
-    val value = 1024L * 1024L + 3L
-    quickjs.maxStackSize = value
-    assertEquals(value, quickjs.maxStackSize)
+  /** QuickJS-style heap tuning knobs have no Hermes equivalent and must fail loudly. */
+  @Test fun tuningApisAreUnsupported() {
+    assertFailsWith<UnsupportedOperationException> { js.memoryLimit }
+    assertFailsWith<UnsupportedOperationException> { js.memoryLimit = 1024L * 1024L }
+    assertFailsWith<UnsupportedOperationException> { js.gcThreshold }
+    assertFailsWith<UnsupportedOperationException> { js.gcThreshold = 256L * 1024L }
+    assertFailsWith<UnsupportedOperationException> { js.maxStackSize }
+    assertFailsWith<UnsupportedOperationException> { js.maxStackSize = 512L * 1024L }
   }
 
   @Test fun initialMemoryUsage() {
-    val usage = quickjs.memoryUsage
-    assertTrue(usage.memoryAllocatedCount > 0L, usage.toString())
-    assertTrue(usage.memoryAllocatedSize > 0L, usage.toString())
-    assertTrue(usage.memoryAllocatedLimit != 0L, usage.toString())
-    assertTrue(usage.memoryUsedCount > 0L, usage.toString())
-    assertTrue(usage.memoryUsedSize in 1L..usage.memoryAllocatedSize, usage.toString())
+    val usage = js.memoryUsage
+    assertTrue(usage.heapSize > 0L, usage.toString())
+    assertTrue(usage.allocatedBytes > 0L, usage.toString())
+    assertTrue(usage.allocatedBytes <= usage.heapSize, usage.toString())
+    assertTrue(usage.totalAllocatedBytes >= usage.allocatedBytes, usage.toString())
+    assertTrue(usage.va >= usage.heapSize, usage.toString())
   }
 
-  @Test fun definePropertyIncreasesPropertiesCount() {
+  @Test fun defineFunctionGrowsTotalAllocatedBytes() {
     val diff = diffMemoryUsage {
-      quickjs.evaluate(
-        """
-        globalThis.hello = 'hello';
-        """,
-      )
-    }
-    assertEquals(diff.stringsCount, 0L) // Why isn't this 1?
-    assertEquals(diff.propertiesCount, 1L)
-  }
-
-  @Test fun defineFunctionIncreasesFunctionsCount() {
-    val diff = diffMemoryUsage {
-      quickjs.evaluate(
+      js.evaluate(
         """
         globalThis.hypotenuse = function(a, b) {
           return Math.sqrt((a * a) + (b * b));
@@ -84,59 +56,47 @@ class TuningApisTest {
         """,
       )
     }
-    assertEquals(diff.jsFunctionsCount, 1L)
-    assertTrue(diff.jsFunctionsSize > 0L)
-    assertTrue(diff.jsFunctionsCodeSize > 0L)
-    assertTrue(diff.jsFunctionsLineNumberTablesCount > 0L)
-    assertTrue(diff.jsFunctionsLineNumberTablesSize > 0L)
+    // totalAllocatedBytes is cumulative: it only ever goes up.
+    assertTrue(diff.totalAllocatedBytes > 0L, diff.toString())
   }
 
-  @Test fun defineFastArrayIncreasesFastArraysCount() {
+  @Test fun typedArrayGrowsMemoryFootprint() {
     val diff = diffMemoryUsage {
-      quickjs.evaluate(
+      js.evaluate(
         """
         globalThis.buffer = new Uint8Array(1024 * 1024);
         """,
       )
     }
-    assertTrue(diff.memoryAllocatedSize >= 1024L * 1024L)
-    assertTrue(diff.memoryUsedSize >= 1024L * 1024L)
-    assertEquals(diff.fastArraysCount, 0L) // Why isn't this 1?
-    assertEquals(diff.fastArraysElementsCount, 0L) // Why isn't this (1024L * 1024L)?
+    // The backing store lives outside the GC heap (external/malloc), the
+    // JSTypedArray object inside it; one of the two must reflect the 1 MB.
+    assertTrue(diff.usedBytes >= 1024L * 1024L, diff.toString())
+  }
+
+  @Test fun explicitGcIncrementsNumCollections() {
+    val before = js.memoryUsage
+    js.gc()
+    val after = js.memoryUsage
+    assertTrue(after.numCollections > before.numCollections, "$before -> $after")
   }
 
   private fun diffMemoryUsage(block: () -> Unit): MemoryUsage {
-    val before = quickjs.memoryUsage
+    js.gc()
+    val before = js.memoryUsage
     block()
-    val after = quickjs.memoryUsage
+    val after = js.memoryUsage
 
     return MemoryUsage(
-      memoryAllocatedCount = after.memoryAllocatedCount - before.memoryAllocatedCount,
-      memoryAllocatedSize = after.memoryAllocatedSize - before.memoryAllocatedSize,
-      memoryAllocatedLimit = after.memoryAllocatedLimit - before.memoryAllocatedLimit,
-      memoryUsedCount = after.memoryUsedCount - before.memoryUsedCount,
-      memoryUsedSize = after.memoryUsedSize - before.memoryUsedSize,
-      atomsCount = after.atomsCount - before.atomsCount,
-      atomsSize = after.atomsSize - before.atomsSize,
-      stringsCount = after.stringsCount - before.stringsCount,
-      stringsSize = after.stringsSize - before.stringsSize,
-      objectsCount = after.objectsCount - before.objectsCount,
-      objectsSize = after.objectsSize - before.objectsSize,
-      propertiesCount = after.propertiesCount - before.propertiesCount,
-      propertiesSize = after.propertiesSize - before.propertiesSize,
-      shapeCount = after.shapeCount - before.shapeCount,
-      shapeSize = after.shapeSize - before.shapeSize,
-      jsFunctionsCount = after.jsFunctionsCount - before.jsFunctionsCount,
-      jsFunctionsSize = after.jsFunctionsSize - before.jsFunctionsSize,
-      jsFunctionsCodeSize = after.jsFunctionsCodeSize - before.jsFunctionsCodeSize,
-      jsFunctionsLineNumberTablesCount = after.jsFunctionsLineNumberTablesCount - before.jsFunctionsLineNumberTablesCount,
-      jsFunctionsLineNumberTablesSize = after.jsFunctionsLineNumberTablesSize - before.jsFunctionsLineNumberTablesSize,
-      cFunctionsCount = after.cFunctionsCount - before.cFunctionsCount,
-      arraysCount = after.arraysCount - before.arraysCount,
-      fastArraysCount = after.fastArraysCount - before.fastArraysCount,
-      fastArraysElementsCount = after.fastArraysElementsCount - before.fastArraysElementsCount,
-      binaryObjectsCount = after.binaryObjectsCount - before.binaryObjectsCount,
-      binaryObjectsSize = after.binaryObjectsSize - before.binaryObjectsSize,
+      heapSize = after.heapSize - before.heapSize,
+      allocatedBytes = after.allocatedBytes - before.allocatedBytes,
+      totalAllocatedBytes = after.totalAllocatedBytes - before.totalAllocatedBytes,
+      va = after.va - before.va,
+      externalBytes = after.externalBytes - before.externalBytes,
+      mallocSizeEstimate = after.mallocSizeEstimate - before.mallocSizeEstimate,
+      peakAllocatedBytes = after.peakAllocatedBytes - before.peakAllocatedBytes,
+      peakLiveAfterGC = after.peakLiveAfterGC - before.peakLiveAfterGC,
+      numCollections = after.numCollections - before.numCollections,
+      numMarkStackOverflows = after.numMarkStackOverflows - before.numMarkStackOverflows,
     )
   }
 }

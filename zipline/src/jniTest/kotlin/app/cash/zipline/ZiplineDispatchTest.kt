@@ -48,7 +48,7 @@ class ZiplineDispatchTest {
 
   @Test
   fun callbacksCalledInSequence() = runTest(dispatcher) {
-    zipline.quickJs.evaluate("testing.app.cash.zipline.testing.prepareSchedulerService()")
+    zipline.jsEngine.evaluate("testing.app.cash.zipline.testing.prepareSchedulerService()")
     val schedulerService = zipline.take<SchedulerService>("schedulerService")
 
     val channel = Channel<String>(capacity = 10)
@@ -96,7 +96,7 @@ class ZiplineDispatchTest {
 
   @Test
   fun recursiveCallbacksInterleaved() = runTest(dispatcher) {
-    zipline.quickJs.evaluate("testing.app.cash.zipline.testing.prepareSchedulerService()")
+    zipline.jsEngine.evaluate("testing.app.cash.zipline.testing.prepareSchedulerService()")
     val schedulerService = zipline.take<SchedulerService>("schedulerService")
 
     val channel = Channel<String>(capacity = 10)
@@ -160,7 +160,7 @@ class ZiplineDispatchTest {
 
   @Test
   fun recursiveSuspendingFunctionsDontStackOverflow() = runTest(dispatcher) {
-    zipline.quickJs.evaluate("testing.app.cash.zipline.testing.prepareSchedulerService()")
+    zipline.jsEngine.evaluate("testing.app.cash.zipline.testing.prepareSchedulerService()")
     val schedulerService = zipline.take<SchedulerService>("schedulerService")
 
     val callback = object : SchedulerService.Callback {
@@ -186,7 +186,7 @@ class ZiplineDispatchTest {
 
   @Test
   fun recursiveDelayingFunctionsDontStackOverflow() = runTest(dispatcher) {
-    zipline.quickJs.evaluate("testing.app.cash.zipline.testing.prepareSchedulerService()")
+    zipline.jsEngine.evaluate("testing.app.cash.zipline.testing.prepareSchedulerService()")
     val schedulerService = zipline.take<SchedulerService>("schedulerService")
 
     val callback = object : SchedulerService.Callback {

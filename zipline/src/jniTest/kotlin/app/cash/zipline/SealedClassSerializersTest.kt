@@ -44,7 +44,7 @@ class SealedClassSerializersTest {
 
   @Test fun sealedClassesEncodeAndDecode() = runTest(dispatcher) {
     val service = zipline.take<SealedClassMessageService>("sealedClassMessageService")
-    zipline.quickJs.evaluate(
+    zipline.jsEngine.evaluate(
       "testing.app.cash.zipline.testing.prepareSealedClassMessageService()",
     )
 
@@ -58,7 +58,7 @@ class SealedClassSerializersTest {
    */
   @Test fun sealedClassesFlow(): Unit = runTest(dispatcher) {
     val service = zipline.take<SealedClassMessageService>("sealedClassMessageService")
-    zipline.quickJs.evaluate(
+    zipline.jsEngine.evaluate(
       "testing.app.cash.zipline.testing.prepareSealedClassMessageService()",
     )
 

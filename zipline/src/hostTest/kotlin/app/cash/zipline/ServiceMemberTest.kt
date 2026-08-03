@@ -49,7 +49,7 @@ class ServiceMemberTest {
   }
 
   @Test fun serviceMember() = runBlocking(dispatcher) {
-    zipline.quickJs.evaluate("testing.app.cash.zipline.testing.prepareServiceMemberJsBridges()")
+    zipline.jsEngine.evaluate("testing.app.cash.zipline.testing.prepareServiceMemberJsBridges()")
 
     val echoService = JvmEchoService()
     val transformer = zipline.take<ServiceTransformer>("serviceTransformer")

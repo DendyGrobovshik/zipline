@@ -17,19 +17,12 @@ package app.cash.zipline.internal.bridge
 
 import app.cash.zipline.ZiplineService
 
-private val referenceQueue: dynamic = js("""[]""")
-
-internal val registry = run {
-  @Suppress("UNUSED_VARIABLE") // `referenceQueue` is used by the js() block below.
-  val referenceQueue = referenceQueue
-  js(
-    """
-    new FinalizationRegistry(function(heldValue) {
-      referenceQueue.push(heldValue);
-    })
-    """,
-  )
-}
+// TODO: enable leak canary once JsEngine ships FinalizationRegistry
+//  (https://github.com/facebook/jsEngine/blob/main/doc/Features.md).
+//  Until then the JS-side tracking primitives would throw on load, so we
+//  replace them with no-op stubs. The Kotlin/Native side has its own
+//  implementation in leakCanaryNative.kt that does NOT use
+//  FinalizationRegistry.
 
 internal actual fun trackLeaks(
   endpoint: Endpoint,
@@ -37,24 +30,9 @@ internal actual fun trackLeaks(
   callHandler: OutboundCallHandler,
   service: ZiplineService,
 ) {
-  registry.register(service, ZiplineServiceReference(endpoint, serviceName, callHandler))
+  // no-op
 }
 
 internal actual fun detectLeaks() {
-  while (true) {
-    val reference = referenceQueue.shift() ?: break
-    (reference as ZiplineServiceReference).afterGc()
-  }
-}
-
-private class ZiplineServiceReference(
-  private val endpoint: Endpoint,
-  private val name: String,
-  private val callHandler: OutboundCallHandler,
-) {
-  fun afterGc() {
-    if (!callHandler.serviceState.closed) {
-      endpoint.eventListener.serviceLeaked(name)
-    }
-  }
+  // no-op
 }

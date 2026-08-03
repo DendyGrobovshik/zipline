@@ -13,15 +13,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef QUICKJS_ANDROID_EXCEPTIONTHROWERS_H
-#define QUICKJS_ANDROID_EXCEPTIONTHROWERS_H
+#ifndef ZIPLINE_HERMES_EXCEPTIONTHROWERS_H
+#define ZIPLINE_HERMES_EXCEPTIONTHROWERS_H
 
 #include <jni.h>
-#include "quickjs/quickjs.h"
 
-class Context;
+class ContextJni;
 
-void throwJavaException(JNIEnv *env, const char *exceptionClass, const char *fmt, ...);
-void throwJsExceptionFmt(JNIEnv *env, const Context *context, const char *fmt, ...);
+void throwJavaException(JNIEnv* env, const char* exceptionClass, const char* fmt, ...);
+void throwJsExceptionFmt(JNIEnv* env, const ContextJni* context, const char* fmt, ...);
 
-#endif //QUICKJS_ANDROID_EXCEPTIONTHROWERS_H
+#endif  // ZIPLINE_HERMES_EXCEPTIONTHROWERS_H

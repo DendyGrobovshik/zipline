@@ -48,7 +48,7 @@ class EncodingTest {
    * these high-valued longs in strings.
    */
   @Test fun encodeLongs() = runBlocking(dispatcher) {
-    zipline.quickJs.evaluate("testing.app.cash.zipline.testing.prepareEncodingJsBridges()")
+    zipline.jsEngine.evaluate("testing.app.cash.zipline.testing.prepareEncodingJsBridges()")
 
     val service = zipline.take<EncodingService>("encodingService")
     assertThat(service.echoLong(Long.MIN_VALUE)).isEqualTo(Long.MIN_VALUE)

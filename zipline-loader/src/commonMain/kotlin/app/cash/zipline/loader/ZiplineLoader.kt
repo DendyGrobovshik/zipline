@@ -530,7 +530,7 @@ class ZiplineLoader internal constructor(
       try {
         loadedManifest.manifest.mainFunction?.let { mainFunction ->
           app.cash.zipline.internal.runApplication(
-            zipline.quickJs,
+            zipline.jsEngine,
             loadedManifest.manifest.mainModuleId,
             mainFunction,
           )

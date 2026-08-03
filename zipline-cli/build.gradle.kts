@@ -46,7 +46,6 @@ kotlin {
 
 dependencies {
   implementation(projects.ziplineApiValidator)
-  implementation(projects.ziplineBytecode)
   implementation(projects.ziplineLoader)
   implementation(libs.clikt)
   implementation(libs.okHttp.core)

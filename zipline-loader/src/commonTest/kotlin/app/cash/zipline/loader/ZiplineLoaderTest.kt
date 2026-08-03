@@ -118,7 +118,7 @@ class ZiplineLoaderTest {
     ).test {
       assertEquals(
         "firetruck loaded\n",
-        (awaitItem() as LoadResult.Success).zipline.quickJs.evaluate(
+        (awaitItem() as LoadResult.Success).zipline.jsEngine.evaluate(
           "globalThis.log",
           "assert.js",
         ),
@@ -156,7 +156,7 @@ class ZiplineLoaderTest {
       assertEquals(
         "apple",
         (
-        (awaitItem() as LoadResult.Success).zipline.quickJs.evaluate(
+        (awaitItem() as LoadResult.Success).zipline.jsEngine.evaluate(
           "globalThis.log",
           "assert.js",
         ) as String
@@ -207,7 +207,7 @@ class ZiplineLoaderTest {
     ) as LoadResult.Success
     ).zipline
     assertEquals(
-      ziplineColdCache.quickJs.evaluate("globalThis.log", "assert.js"),
+      ziplineColdCache.jsEngine.evaluate("globalThis.log", "assert.js"),
       """
       |alpha loaded
       |bravo loaded
@@ -229,7 +229,7 @@ class ZiplineLoaderTest {
       ) as LoadResult.Success
     ).zipline
     assertEquals(
-      ziplineWarmedCache.quickJs.evaluate("globalThis.log", "assert.js"),
+      ziplineWarmedCache.jsEngine.evaluate("globalThis.log", "assert.js"),
       """
       |alpha loaded
       |bravo loaded
@@ -391,7 +391,7 @@ class ZiplineLoaderTest {
       assertEquals(
         "apple",
         (
-          (awaitItem() as LoadResult.Success).zipline.quickJs.evaluate(
+          (awaitItem() as LoadResult.Success).zipline.jsEngine.evaluate(
           "globalThis.log",
             "assert.js",
         ) as String
@@ -402,7 +402,7 @@ class ZiplineLoaderTest {
       assertEquals(
         "firetruck",
         (
-          (awaitItem() as LoadResult.Success).zipline.quickJs.evaluate(
+          (awaitItem() as LoadResult.Success).zipline.jsEngine.evaluate(
             "globalThis.log",
             "assert.js",
           ) as String
@@ -439,7 +439,7 @@ class ZiplineLoaderTest {
   }
 
   @Suppress("INVISIBLE_REFERENCE", "INVISIBLE_MEMBER") // Access :zipline-loader internals.
-  private fun Zipline.getLog(): String? = app.cash.zipline.internal.getLog(quickJs)
+  private fun Zipline.getLog(): String? = app.cash.zipline.internal.getLog(jsEngine)
 
   private suspend fun ZiplineLoader.loadOrFail(
     applicationName: String,

@@ -1,0 +1,4 @@
+[submodule "zipline/native/hermes"]
+	path = zipline/native/hermes
+	url = git@github.com:aranyar/hermes.git
+	branch = zipline-integration

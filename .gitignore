@@ -6,12 +6,14 @@
 # Gradle
 .gradle
 build/
+zipline/native/hermes-jni-build/build*
 local.properties
 reports
 jacoco.exec
 .externalNativeBuild
 .cxx
 .kotlin
+zipline/src/androidMain/resources/
 
 # iOS
 *.pbxuser
@@ -25,6 +27,9 @@ docs/0.x
 
 # Testing
 zipline-gradle-plugin/src/test/projects/**/gradle/wrapper
+
+# intrinsic-tests build artifacts (build/ dirs are covered above)
+intrinsic-tests/native-test/hermes/qjs
 
 # Yarn
 samples/**/yarn.lock
