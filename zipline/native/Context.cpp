@@ -543,6 +543,9 @@ Context::toJavaObject(JNIEnv* env, const JSValueConst& value, bool throwOnUnsupp
 
     case JS_TAG_NULL:
     case JS_TAG_UNDEFINED:
+      result = nullptr;
+      break;
+
     case JS_TAG_OBJECT:
       if (JS_IsArray(jsContext, value)) {
         auto arrayLengthProperty = JS_GetPropertyStr(jsContext, value, "length");
@@ -937,17 +940,22 @@ static jobject rdmaChangeToJava(JNIEnv* env, const RdmaChange& ch, Context* cont
       JSValue dispVal = JS_GetPropertyStr(context->jsContext, ch.jsValue, "bridge_dispatch");
       if (!JS_IsUndefined(dispVal)) {
         JniBridgeDispatch* disp = (JniBridgeDispatch*)(intptr_t)JS_VALUE_GET_FLOAT64(dispVal);
-        jobject uiChange = disp->toJavaObject(env, context->jsContext, &ch.jsValue);
-        JS_FreeValue(context->jsContext, dispVal);
-        if (!uiChange) {
+        if (disp != nullptr) {
+          jobject uiChange = disp->toJavaObject(env, context->jsContext, ch.jsValue);
+          JS_FreeValue(context->jsContext, dispVal);
+          if (!uiChange) {
+            JS_FreeValue(context->jsContext, ch.jsValue);
+            return nullptr;
+          }
+          jobject result = env->CallStaticObjectMethod(context->rdmaBridgeClass, context->rdmaBridgeCreateBridgeChange,
+              ch.id, uiChange);
+          env->DeleteLocalRef(uiChange);
           JS_FreeValue(context->jsContext, ch.jsValue);
-          return nullptr;
+          return result;
         }
-        jobject result = env->CallStaticObjectMethod(context->rdmaBridgeClass, context->rdmaBridgeCreateBridgeChange,
-            ch.id, uiChange);
-        env->DeleteLocalRef(uiChange);
-        JS_FreeValue(context->jsContext, ch.jsValue);
-        return result;
+        JS_FreeValue(context->jsContext, dispVal);
+      } else {
+        JS_FreeValue(context->jsContext, dispVal);
       }
 #if defined(__ANDROID__) && false // TODO(gogabr): need to find out why linking fails
       {
