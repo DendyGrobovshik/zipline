@@ -25,32 +25,29 @@
 extern "C" {
 #endif
 
-typedef struct JniBridgeDispatch {
-    jobject (*toJavaObject)(JNIEnv *env, JSContext *ctx, JSValue jsObj);
-} JniBridgeDispatch;
+typedef jobject (*BridgeConverterFn)(JNIEnv *env, JSContext *ctx, JSValue jsObj);
 
-/** Pack JniBridgeDispatch* into a JSValue (as float64, bit-preserving). */
-static inline JSValue bridgeDispatchToJSValue(JSContext* ctx, const JniBridgeDispatch* disp) {
-    const void* ptr = (const void*)disp;
+/** Pack a bridge converter pointer into a JSValue (as float64, bit-preserving). */
+static inline JSValue bridgeConverterToJSValue(JSContext* ctx, BridgeConverterFn fn) {
+    const void* ptr = (const void*)fn;
     double d;
     memcpy(&d, &ptr, sizeof(d));
     return JS_NewFloat64(ctx, d);
 }
-/** Unpack a JSValue (float64) back to JniBridgeDispatch*. Returns NULL if undefined. */
-static inline JniBridgeDispatch* bridgeDispatchFromJSValue(JSValue v) {
+/** Unpack a JSValue (float64) back to a bridge converter. Returns NULL if undefined. */
+static inline BridgeConverterFn bridgeConverterFromJSValue(JSValue v) {
     if (JS_IsUndefined(v)) return NULL;
     double d = JS_VALUE_GET_FLOAT64(v);
     void* ptr;
     memcpy(&ptr, &d, sizeof(ptr));
-    return (JniBridgeDispatch*)ptr;
+    return (BridgeConverterFn)ptr;
 }
 /** Register a JNI init function (caches class/method refs on JVM thread). */
 void addBridgeInit(void (*fn)(JNIEnv* env));
 
 /** Register a bridge FQN → converter mapping. */
-void addBridgeEntry(const char* fq, jobject (*fn)(JNIEnv *env, JSContext *ctx, JSValue jsObj));
 
-/** Run all registered JNI init functions. */
+void addBridgeEntry(const char* fq, BridgeConverterFn fn);
 void init_all(JNIEnv* env);
 
 /** Install __bridgeRegister on global and run register_all. */

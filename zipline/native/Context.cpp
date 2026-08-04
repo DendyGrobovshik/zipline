@@ -34,10 +34,10 @@
 #include <string>
 #include <utility>
 
-static std::vector<std::pair<std::string, jobject(*)(JNIEnv*,JSContext*,JSValue)>> bridgeTable;
+static std::vector<std::pair<std::string, BridgeConverterFn>> bridgeTable;
 static std::vector<void(*)(JNIEnv*)> bridgeInits;
 
-extern "C" __attribute__((used, visibility("default"))) void addBridgeEntry(const char* fq, jobject(*fn)(JNIEnv*,JSContext*,JSValue)) {
+extern "C" __attribute__((used, visibility("default"))) void addBridgeEntry(const char* fq, BridgeConverterFn fn) {
     bridgeTable.push_back({fq, fn});
 }
 
@@ -61,11 +61,9 @@ static JSValue bridge_register_js(JSContext *ctx, JSValueConst this_val,
     if (JS_IsUndefined(ctor)) { JS_FreeCString(ctx, fq); return JS_UNDEFINED; }
     for (auto& entry : bridgeTable) {
         if (strcmp(entry.first.c_str(), fq) == 0) {
-            JniBridgeDispatch *disp = (JniBridgeDispatch *)js_malloc(ctx, sizeof(JniBridgeDispatch));
-            disp->toJavaObject = entry.second;
             JSValue proto = JS_GetPropertyStr(ctx, ctor, "prototype");
             JS_SetPropertyStr(ctx, proto, "bridge_dispatch",
-                bridgeDispatchToJSValue(ctx, disp));
+                bridgeConverterToJSValue(ctx, entry.second));
             JS_FreeValue(ctx, proto);
 #if defined(__ANDROID__)
             __android_log_print(ANDROID_LOG_INFO, "BRIDGE",
@@ -490,10 +488,10 @@ __attribute__((used, visibility("default"))) jobject bridgeForAny(JNIEnv *env, J
       jobject result = nullptr;
       // 1) Try bridge_dispatch
       JSValue disp = JS_GetPropertyStr(ctx, val, "bridge_dispatch");
-      auto* d = bridgeDispatchFromJSValue(disp);
+      BridgeConverterFn d = bridgeConverterFromJSValue(disp);
       JS_FreeValue(ctx, disp);
       if (d != nullptr) {
-        result = d->toJavaObject(env, ctx, val);
+        result = d(env, ctx, val);
         if (result) return result;
       }
       // 2) Try Kotlin/JS Long
@@ -568,9 +566,9 @@ Context::toJavaObject(JNIEnv* env, const JSValueConst& value, bool throwOnUnsupp
       // Try bridge_dispatch
       {
         JSValue disp = JS_GetPropertyStr(jsContext, value, "bridge_dispatch");
-        auto* d = bridgeDispatchFromJSValue(disp);
+        BridgeConverterFn d = bridgeConverterFromJSValue(disp);
         if (d != nullptr) {
-          result = d->toJavaObject(env, jsContext, value);
+          result = d(env, jsContext, value);
         }
         JS_FreeValue(jsContext, disp);
         if (result) return result;
@@ -936,9 +934,9 @@ static jobject rdmaChangeToJava(JNIEnv* env, const RdmaChange& ch, Context* cont
       return env->CallStaticObjectMethod(context->rdmaBridgeClass, context->rdmaBridgeCreateMove, ch.id, ch.field1, ch.field2, ch.field3, ch.count);
     case RdmaChangeType::BridgeChange: {
       JSValue dispVal = JS_GetPropertyStr(context->jsContext, ch.jsValue, "bridge_dispatch");
-      auto* disp = bridgeDispatchFromJSValue(dispVal);
+      BridgeConverterFn disp = bridgeConverterFromJSValue(dispVal);
       if (disp != nullptr) {
-        jobject uiChange = disp->toJavaObject(env, context->jsContext, ch.jsValue);
+        jobject uiChange = disp(env, context->jsContext, ch.jsValue);
         if (!uiChange) {
 #ifdef __ANDROID__
           __android_log_print(ANDROID_LOG_ERROR, "BRIDGE",
