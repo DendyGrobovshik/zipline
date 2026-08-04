@@ -26,7 +26,7 @@ extern "C" {
 #endif
 
 typedef struct JniBridgeDispatch {
-    jobject (*toJavaObject)(JNIEnv *env, JSContext *ctx, const JSValue *jsObj);
+    jobject (*toJavaObject)(JNIEnv *env, JSContext *ctx, JSValue jsObj);
 } JniBridgeDispatch;
 
 /** Pack JniBridgeDispatch* into a JSValue (as float64, bit-preserving). */
@@ -48,7 +48,7 @@ static inline JniBridgeDispatch* bridgeDispatchFromJSValue(JSValue v) {
 void addBridgeInit(void (*fn)(JNIEnv* env));
 
 /** Register a bridge FQN → converter mapping. */
-void addBridgeEntry(const char* fq, jobject (*fn)(JNIEnv *env, JSContext *ctx, const JSValue *jsObj));
+void addBridgeEntry(const char* fq, jobject (*fn)(JNIEnv *env, JSContext *ctx, JSValue jsObj));
 
 /** Run all registered JNI init functions. */
 void init_all(JNIEnv* env);
@@ -56,10 +56,10 @@ void init_all(JNIEnv* env);
 /** Install __bridgeRegister on global and run register_all. */
 void register_all(JSContext* ctx);
 /** If val is a Kotlin/JS Long ({low_1, high_1}), return a boxed java.lang.Long, else NULL. */
-jobject bridgeTryUnwrapLong(JNIEnv *env, JSContext *ctx, const JSValue *val);
+jobject bridgeTryUnwrapLong(JNIEnv *env, JSContext *ctx, JSValue val);
 
 /** Convert any JS value to a Java object. Returns NULL for null/undefined/unrecognized. */
-jobject bridgeForAny(JNIEnv *env, JSContext *ctx, const JSValue *val);
+jobject bridgeForAny(JNIEnv *env, JSContext *ctx, JSValue val);
 #ifdef __cplusplus
 }
 #endif

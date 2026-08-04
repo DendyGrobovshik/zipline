@@ -82,7 +82,7 @@ internal fun generateBridgeFile(outputDir: String, annotatedClass: IrClass) {
       for (f in nullableInlineFields.distinctBy { it.ktType }) {
         val inlinePrefix = cFunctionPrefix(FqName(f.ktType))
         appendLine("extern void ${inlinePrefix}_init(JNIEnv *env);")
-        appendLine("extern jobject ${inlinePrefix}_fromValue(JNIEnv *env, JSContext *ctx, const JSValue *jsVal);")
+        appendLine("extern jobject ${inlinePrefix}_fromValue(JNIEnv *env, JSContext *ctx, JSValue jsVal);")
       }
       appendLine()
     }
@@ -188,7 +188,7 @@ internal fun generateBridgeFile(outputDir: String, annotatedClass: IrClass) {
     appendLine()
 
     // -- toJavaObject function --
-    appendLine("static jobject ${functionPrefix}_toJavaObject(JNIEnv *env, JSContext *ctx, const JSValue *jsObj) {")
+    appendLine("static jobject ${functionPrefix}_toJavaObject(JNIEnv *env, JSContext *ctx, JSValue jsObj) {")
     if (!isObject) {
       appendLine("    if (_cls == NULL || _ctor == NULL) {")
       appendLine("#ifdef __ANDROID__")
@@ -225,14 +225,14 @@ internal fun generateBridgeFile(outputDir: String, annotatedClass: IrClass) {
       // JVM value for the field
       val javaVar = "java_${field.name}"
 
-      appendLine("    JSValue js_${field.name} = JS_GetPropertyStr(ctx, *jsObj, \"${field.jsPropertyName}\");")
+      appendLine("    JSValue js_${field.name} = JS_GetPropertyStr(ctx, jsObj, \"${field.jsPropertyName}\");")
       // For Long-backed inline classes (e.g. Color), the JS object may be unboxed —
-      // *jsObj IS the Long {low_1, high_1} with no .value wrapper. If .value is
-      // undefined, fall back to using *jsObj directly as the Long representation.
+      // jsObj IS the Long {low_1, high_1} with no .value wrapper. If .value is
+      // undefined, fall back to using jsObj directly as the Long representation.
       if (field.ktType == "kotlin.Long" && isInlineClass(annotatedClass)) {
         appendLine("    if (JS_IsUndefined(js_${field.name})) {")
         appendLine("        JS_FreeValue(ctx, js_${field.name});")
-        appendLine("        js_${field.name} = JS_DupValue(ctx, *jsObj);")
+        appendLine("        js_${field.name} = JS_DupValue(ctx, jsObj);")
         appendLine("    }")
       }
       // Inline value classes (e.g. @JvmInline value class Id(val value: Int))
@@ -327,7 +327,7 @@ internal fun generateBridgeFile(outputDir: String, annotatedClass: IrClass) {
         }
         field.isInline && field.isNullable -> {
           val inlineCPrefix = cFunctionPrefix(FqName(field.ktType))
-          appendLine("        $javaVar = ${inlineCPrefix}_fromValue(env, ctx, &js_${field.name});")
+          appendLine("        $javaVar = ${inlineCPrefix}_fromValue(env, ctx, js_${field.name});")
         }
         field.isObjectType -> {
           appendLine("        // Look up bridge_dispatch on the sub-object to convert it.")
@@ -351,7 +351,7 @@ internal fun generateBridgeFile(outputDir: String, annotatedClass: IrClass) {
           appendLine("        }")
           appendLine("        // TODO: when pointer compression lands, use JS_VALUE_GET_INT(disp_val_...) to read arena offset")
           appendLine("        JniBridgeDispatch *disp_${field.name} = bridgeDispatchFromJSValue(disp_val_${field.name});")
-          appendLine("        $javaVar = disp_${field.name}->toJavaObject(env, ctx, &js_${field.name});")
+          appendLine("        $javaVar = disp_${field.name}->toJavaObject(env, ctx, js_${field.name});")
           appendLine("        JS_FreeValue(ctx, disp_val_${field.name});")
         }
       }
@@ -409,21 +409,21 @@ internal fun generateBridgeFile(outputDir: String, annotatedClass: IrClass) {
       val underlyingField = constructorFields[0]
       val underlyingCType = kotlinToCType[underlyingField.ktType] ?: "jobject"
       appendLine()
-      appendLine("jobject ${functionPrefix}_fromValue(JNIEnv *env, JSContext *ctx, const JSValue *jsVal) {")
+      appendLine("jobject ${functionPrefix}_fromValue(JNIEnv *env, JSContext *ctx, JSValue jsVal) {")
       appendLine("    ${functionPrefix}_init(env);")
       appendLine("    if (_cls == NULL || _ctor == NULL) return NULL;")
       appendLine("    $underlyingCType java_v;")
       appendLine("    {")
-      appendLine("        int tag_v = JS_VALUE_GET_NORM_TAG(*jsVal);")
+      appendLine("        int tag_v = JS_VALUE_GET_NORM_TAG(jsVal);")
       appendLine("        if (tag_v == JS_TAG_FLOAT64) {")
-      appendLine("            java_v = ($underlyingCType)JS_VALUE_GET_FLOAT64(*jsVal);")
+      appendLine("            java_v = ($underlyingCType)JS_VALUE_GET_FLOAT64(jsVal);")
       appendLine("        } else if (tag_v == JS_TAG_INT) {")
-      appendLine("            java_v = ($underlyingCType)JS_VALUE_GET_INT(*jsVal);")
+      appendLine("            java_v = ($underlyingCType)JS_VALUE_GET_INT(jsVal);")
       if (underlyingField.ktType == "kotlin.Long") {
         appendLine("        } else if (tag_v == JS_TAG_OBJECT) {")
         appendLine("            /* Kotlin/JS Long: {low_1, high_1} packed representation */")
-        appendLine("            JSValue lv = JS_GetPropertyStr(ctx, *jsVal, \"low_1\");")
-        appendLine("            JSValue hv = JS_GetPropertyStr(ctx, *jsVal, \"high_1\");")
+        appendLine("            JSValue lv = JS_GetPropertyStr(ctx, jsVal, \"low_1\");")
+        appendLine("            JSValue hv = JS_GetPropertyStr(ctx, jsVal, \"high_1\");")
         appendLine("            java_v = (($underlyingCType)JS_VALUE_GET_INT(hv) << 32) | (($underlyingCType)JS_VALUE_GET_INT(lv) & 0xFFFFFFFF);")
         appendLine("            JS_FreeValue(ctx, lv);")
         appendLine("            JS_FreeValue(ctx, hv);")
@@ -613,7 +613,7 @@ internal fun emitGeneralArrayLoop(
   sb.appendLine("                    if (!JS_IsUndefined(disp_val)) {")
   sb.appendLine("                        // TODO: when pointer compression lands, use JS_VALUE_GET_INT(disp_val) to read arena offset")
   sb.appendLine("                        JniBridgeDispatch *disp = bridgeDispatchFromJSValue(disp_val);")
-  sb.appendLine("                        java_elem = disp->toJavaObject(env, ctx, &elem);")
+  sb.appendLine("                        java_elem = disp->toJavaObject(env, ctx, elem);")
   sb.appendLine("                    }")
   sb.appendLine("                    JS_FreeValue(ctx, disp_val);")
   sb.appendLine("                    break;")
@@ -665,7 +665,7 @@ internal fun emitAnyFieldExtraction(
 ) {
   val javaVar = "java_${field.name}"
   sb.appendLine("        // Any? field — delegate to bridgeForAny")
-  sb.appendLine("        $javaVar = bridgeForAny(env, ctx, &js_${field.name});")
+  sb.appendLine("        $javaVar = bridgeForAny(env, ctx, js_${field.name});")
 }
 
 // -- Collection field extraction (List, Set, Map from Kotlin stdlib) --
@@ -739,7 +739,7 @@ internal fun emitCollectionExtraction(
   sb.appendLine("                        JSValue _cedisp = JS_GetPropertyStr(ctx, _celem, \"bridge_dispatch\");")
   sb.appendLine("                        if (!JS_IsUndefined(_cedisp)) {")
   sb.appendLine("                            JniBridgeDispatch *_cedp = bridgeDispatchFromJSValue(_cedisp);")
-  sb.appendLine("                            _celem_obj = _cedp->toJavaObject(env, ctx, &_celem);")
+  sb.appendLine("                            _celem_obj = _cedp->toJavaObject(env, ctx, _celem);")
   sb.appendLine("                            JS_FreeValue(ctx, _cedisp);")
   sb.appendLine("                        }")
   sb.appendLine("                        break;")
@@ -756,7 +756,7 @@ internal fun emitCollectionExtraction(
   sb.appendLine("            JSValue coldisp_${field.name} = JS_GetPropertyStr(ctx, colArr_${field.name}, \"bridge_dispatch\");")
   sb.appendLine("            if (!JS_IsUndefined(coldisp_${field.name})) {")
   sb.appendLine("                JniBridgeDispatch *coldisp_p_${field.name} = bridgeDispatchFromJSValue(coldisp_${field.name});")
-  sb.appendLine("                $javaVar = coldisp_p_${field.name}->toJavaObject(env, ctx, &colArr_${field.name});")
+  sb.appendLine("                $javaVar = coldisp_p_${field.name}->toJavaObject(env, ctx, colArr_${field.name});")
   sb.appendLine("                JS_FreeValue(ctx, coldisp_${field.name});")
   sb.appendLine("            } else {")
   sb.appendLine("                JS_FreeValue(ctx, coldisp_${field.name});")

@@ -34,10 +34,10 @@
 #include <string>
 #include <utility>
 
-static std::vector<std::pair<std::string, jobject(*)(JNIEnv*,JSContext*,const JSValue*)>> bridgeTable;
+static std::vector<std::pair<std::string, jobject(*)(JNIEnv*,JSContext*,JSValue)>> bridgeTable;
 static std::vector<void(*)(JNIEnv*)> bridgeInits;
 
-extern "C" __attribute__((used, visibility("default"))) void addBridgeEntry(const char* fq, jobject(*fn)(JNIEnv*,JSContext*,const JSValue*)) {
+extern "C" __attribute__((used, visibility("default"))) void addBridgeEntry(const char* fq, jobject(*fn)(JNIEnv*,JSContext*,JSValue)) {
     bridgeTable.push_back({fq, fn});
 }
 
@@ -426,11 +426,11 @@ void Context::setOutboundCallChannel(JNIEnv* env, jstring name, jobject callChan
 }
 
 
-__attribute__((used, visibility("default"))) jobject bridgeTryUnwrapLong(JNIEnv *env, JSContext *ctx, const JSValue *val) {
-  JSValue lo = JS_GetPropertyStr(ctx, *val, "low_1");
+__attribute__((used, visibility("default"))) jobject bridgeTryUnwrapLong(JNIEnv *env, JSContext *ctx, JSValue val) {
+  JSValue lo = JS_GetPropertyStr(ctx, val, "low_1");
   if (JS_IsUndefined(lo)) return nullptr;
 
-  JSValue ctor = JS_GetPropertyStr(ctx, *val, "constructor");
+  JSValue ctor = JS_GetPropertyStr(ctx, val, "constructor");
   int isLong = 0;
   if (!JS_IsUndefined(ctor)) {
     JSValue ctorName = JS_GetPropertyStr(ctx, ctor, "name");
@@ -446,7 +446,7 @@ __attribute__((used, visibility("default"))) jobject bridgeTryUnwrapLong(JNIEnv 
     return nullptr;
   }
 
-  JSValue hi = JS_GetPropertyStr(ctx, *val, "high_1");
+  JSValue hi = JS_GetPropertyStr(ctx, val, "high_1");
   jint loVal = JS_VALUE_GET_INT(lo);
   jint hiVal = JS_VALUE_GET_INT(hi);
   jlong lv = ((jlong)hiVal << 32) | ((jlong)loVal & 0xFFFFFFFF);
@@ -459,28 +459,28 @@ __attribute__((used, visibility("default"))) jobject bridgeTryUnwrapLong(JNIEnv 
   return env->CallStaticObjectMethodA(context->longClass, context->longValueOf, &v);
 }
 
-__attribute__((used, visibility("default"))) jobject bridgeForAny(JNIEnv *env, JSContext *ctx, const JSValue *val) {
-  int tag = JS_VALUE_GET_NORM_TAG(*val);
+__attribute__((used, visibility("default"))) jobject bridgeForAny(JNIEnv *env, JSContext *ctx, JSValue val) {
+  int tag = JS_VALUE_GET_NORM_TAG(val);
   auto* context = reinterpret_cast<Context*>(JS_GetRuntimeOpaque(JS_GetRuntime(ctx)));
 
   switch (tag) {
     case JS_TAG_INT: {
       jvalue v;
-      v.j = static_cast<jint>(JS_VALUE_GET_INT(*val));
+      v.j = static_cast<jint>(JS_VALUE_GET_INT(val));
       return env->CallStaticObjectMethodA(context->integerClass, context->integerValueOf, &v);
     }
     case JS_TAG_FLOAT64: {
       jvalue v;
-      v.d = static_cast<jdouble>(JS_VALUE_GET_FLOAT64(*val));
+      v.d = static_cast<jdouble>(JS_VALUE_GET_FLOAT64(val));
       return env->CallStaticObjectMethodA(context->doubleClass, context->doubleValueOf, &v);
     }
     case JS_TAG_BOOL: {
       jvalue v;
-      v.z = static_cast<jboolean>(JS_VALUE_GET_BOOL(*val));
+      v.z = static_cast<jboolean>(JS_VALUE_GET_BOOL(val));
       return env->CallStaticObjectMethodA(context->booleanClass, context->booleanValueOf, &v);
     }
     case JS_TAG_STRING:
-      return context->toJavaString(env, *val);
+      return context->toJavaString(env, val);
 
     case JS_TAG_NULL:
     case JS_TAG_UNDEFINED:
@@ -489,7 +489,7 @@ __attribute__((used, visibility("default"))) jobject bridgeForAny(JNIEnv *env, J
     case JS_TAG_OBJECT: {
       jobject result = nullptr;
       // 1) Try bridge_dispatch
-      JSValue disp = JS_GetPropertyStr(ctx, *val, "bridge_dispatch");
+      JSValue disp = JS_GetPropertyStr(ctx, val, "bridge_dispatch");
       auto* d = bridgeDispatchFromJSValue(disp);
       JS_FreeValue(ctx, disp);
       if (d != nullptr) {
@@ -570,14 +570,14 @@ Context::toJavaObject(JNIEnv* env, const JSValueConst& value, bool throwOnUnsupp
         JSValue disp = JS_GetPropertyStr(jsContext, value, "bridge_dispatch");
         auto* d = bridgeDispatchFromJSValue(disp);
         if (d != nullptr) {
-          result = d->toJavaObject(env, jsContext, &value);
+          result = d->toJavaObject(env, jsContext, value);
         }
         JS_FreeValue(jsContext, disp);
         if (result) return result;
       }
       // Try Kotlin/JS Long
       {
-        result = bridgeTryUnwrapLong(env, jsContext, &value);
+        result = bridgeTryUnwrapLong(env, jsContext, value);
         if (result) return result;
       }
       // Fall through.
@@ -938,7 +938,7 @@ static jobject rdmaChangeToJava(JNIEnv* env, const RdmaChange& ch, Context* cont
       JSValue dispVal = JS_GetPropertyStr(context->jsContext, ch.jsValue, "bridge_dispatch");
       auto* disp = bridgeDispatchFromJSValue(dispVal);
       if (disp != nullptr) {
-        jobject uiChange = disp->toJavaObject(env, context->jsContext, &ch.jsValue);
+        jobject uiChange = disp->toJavaObject(env, context->jsContext, ch.jsValue);
         if (!uiChange) {
 #ifdef __ANDROID__
           __android_log_print(ANDROID_LOG_ERROR, "BRIDGE",
