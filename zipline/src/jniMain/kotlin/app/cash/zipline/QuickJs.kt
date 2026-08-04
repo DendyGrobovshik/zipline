@@ -184,10 +184,7 @@ actual class QuickJs private constructor(
   private external fun initRdmaChangesChannel(context: Long)
 
   internal actual fun bridgeInitAll() {
-    val jsCtx = getJsContext(context)
-    println("BRIDGE: bridgeInitAll jsCtx=$jsCtx")
-    bridgeInitAllNative(jsCtx)
-    println("BRIDGE: bridgeInitAll succeeded")
+    bridgeInitAllNative(getJsContext(context))
   }
 
   @JvmName("bridgeInitAllNative")

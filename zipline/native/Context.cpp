@@ -65,12 +65,6 @@ static JSValue bridge_register_js(JSContext *ctx, JSValueConst this_val,
             JS_SetPropertyStr(ctx, proto, "bridge_dispatch",
                 bridgeConverterToJSValue(ctx, entry.second));
             JS_FreeValue(ctx, proto);
-#if defined(__ANDROID__)
-            __android_log_print(ANDROID_LOG_INFO, "BRIDGE",
-                "bridge_register_js: registered '%s'", fq);
-#else
-            printf("BRIDGE: bridge_register_js: registered '%s'\n", fq);
-#endif
             JS_FreeCString(ctx, fq);
             return JS_UNDEFINED;
         }
@@ -898,6 +892,7 @@ static jobject rdmaChangeToJava(JNIEnv* env, const RdmaChange& ch, Context* cont
       jobject result = env->CallStaticObjectMethod(context->rdmaBridgeClass, context->rdmaBridgeCreatePropertyChange,
           ch.id, ch.field1, ch.field2, jsonElement);
       if (jsonElement) env->DeleteLocalRef(jsonElement);
+      JS_FreeValue(context->jsContext, ch.jsValue);
       return result;
     }
     case RdmaChangeType::ModifierChange: {
@@ -923,6 +918,7 @@ static jobject rdmaChangeToJava(JNIEnv* env, const RdmaChange& ch, Context* cont
       }
       jobject result = env->CallStaticObjectMethod(context->rdmaBridgeClass, context->rdmaBridgeCreateModifierChange, ch.id, elementsList);
       env->DeleteLocalRef(elementsList);
+      JS_FreeValue(context->jsContext, ch.jsValue);
       return result;
     }
     case RdmaChangeType::Add:
@@ -946,43 +942,6 @@ static jobject rdmaChangeToJava(JNIEnv* env, const RdmaChange& ch, Context* cont
           JS_FreeValue(context->jsContext, ch.jsValue);
           return nullptr;
         }
-#ifdef __ANDROID__
-        // Diagnostic: log JS-side value and resulting Java object
-        {
-          JSValue ctor = JS_GetPropertyStr(context->jsContext, ch.jsValue, "constructor");
-          const char* ctorName = "(unknown)";
-          if (!JS_IsUndefined(ctor)) {
-            JSValue ctorNm = JS_GetPropertyStr(context->jsContext, ctor, "name");
-            ctorName = JS_ToCString(context->jsContext, ctorNm);
-            JS_FreeValue(context->jsContext, ctorNm);
-          }
-          JS_FreeValue(context->jsContext, ctor);
-          JSValue v1 = JS_GetPropertyStr(context->jsContext, ch.jsValue, "value");
-          JSValue v2 = JS_GetPropertyStr(context->jsContext, ch.jsValue, "value_1");
-          JSValue v3 = JS_GetPropertyStr(context->jsContext, ch.jsValue, "tag");
-          JSValue v4 = JS_GetPropertyStr(context->jsContext, ch.jsValue, "tag_1");
-          const char* s1 = JS_ToCString(context->jsContext, v1);
-          const char* s2 = JS_ToCString(context->jsContext, v2);
-          const char* s3 = JS_ToCString(context->jsContext, v3);
-          const char* s4 = JS_ToCString(context->jsContext, v4);
-          __android_log_print(ANDROID_LOG_INFO, "BRIDGE_DIAG",
-              "BridgeChange id=%d ctor=%s value=%s value_1=%s tag=%s tag_1=%s",
-              ch.id,
-              ctorName ? ctorName : "(null)",
-              s1 ? s1 : "(null)",
-              s2 ? s2 : "(null)",
-              s3 ? s3 : "(null)",
-              s4 ? s4 : "(null)");
-          if (s1) JS_FreeCString(context->jsContext, s1);
-          if (s2) JS_FreeCString(context->jsContext, s2);
-          if (s3) JS_FreeCString(context->jsContext, s3);
-          if (s4) JS_FreeCString(context->jsContext, s4);
-          JS_FreeValue(context->jsContext, v1);
-          JS_FreeValue(context->jsContext, v2);
-          JS_FreeValue(context->jsContext, v3);
-          JS_FreeValue(context->jsContext, v4);
-        }
-#endif
         jobject result = env->CallStaticObjectMethod(context->rdmaBridgeClass, context->rdmaBridgeCreateBridgeChange,
             ch.id, uiChange);
         env->DeleteLocalRef(uiChange);
@@ -1112,12 +1071,8 @@ static JSValue rdmaAppendPropertyChange(
   ch.id = JS_VALUE_GET_INT(argv[0]);
   ch.field1 = JS_VALUE_GET_INT(argv[1]);
   ch.field2 = JS_VALUE_GET_INT(argv[2]);
-  ch.jsValue = argv[3];
-#ifdef __ANDROID__
-  __android_log_print(ANDROID_LOG_INFO, "BRIDGE_DIAG",
-      "appendPropertyChange id=%d widgetTag=%d propertyTag=%d",
-      ch.id, ch.field1, ch.field2);
-#endif
+  ch.jsValue = JS_DupValue(ctx, argv[3]);
+
   context->pendingChanges.push_back(ch);
 }
 
@@ -1130,7 +1085,7 @@ static JSValue rdmaAppendModifierChange(
   RdmaChange ch;
   ch.type = RdmaChangeType::ModifierChange;
   ch.id = JS_VALUE_GET_INT(argv[0]);
-  ch.jsValue = argv[1];
+  ch.jsValue = JS_DupValue(ctx, argv[1]);
   context->pendingChanges.push_back(ch);
   flushIfBatchFull(context);
   return JS_UNDEFINED;
