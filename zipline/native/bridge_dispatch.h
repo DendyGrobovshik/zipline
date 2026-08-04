@@ -18,6 +18,8 @@
 
 #include "quickjs/quickjs.h"
 #include <jni.h>
+#include <string.h>
+
 
 #ifdef __cplusplus
 extern "C" {
@@ -27,6 +29,21 @@ typedef struct JniBridgeDispatch {
     jobject (*toJavaObject)(JNIEnv *env, JSContext *ctx, const JSValue *jsObj);
 } JniBridgeDispatch;
 
+/** Pack JniBridgeDispatch* into a JSValue (as float64, bit-preserving). */
+static inline JSValue bridgeDispatchToJSValue(JSContext* ctx, const JniBridgeDispatch* disp) {
+    const void* ptr = (const void*)disp;
+    double d;
+    memcpy(&d, &ptr, sizeof(d));
+    return JS_NewFloat64(ctx, d);
+}
+/** Unpack a JSValue (float64) back to JniBridgeDispatch*. Returns NULL if undefined. */
+static inline JniBridgeDispatch* bridgeDispatchFromJSValue(JSValue v) {
+    if (JS_IsUndefined(v)) return NULL;
+    double d = JS_VALUE_GET_FLOAT64(v);
+    void* ptr;
+    memcpy(&ptr, &d, sizeof(ptr));
+    return (JniBridgeDispatch*)ptr;
+}
 /** Register a JNI init function (caches class/method refs on JVM thread). */
 void addBridgeInit(void (*fn)(JNIEnv* env));
 

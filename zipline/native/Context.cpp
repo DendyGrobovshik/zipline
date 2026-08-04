@@ -30,7 +30,6 @@
 #include "common/intset-builtins.h"
 #include "quickjs/quickjs.h"
 
-#ifdef __ANDROID__
 #include <vector>
 #include <string>
 #include <utility>
@@ -66,8 +65,14 @@ static JSValue bridge_register_js(JSContext *ctx, JSValueConst this_val,
             disp->toJavaObject = entry.second;
             JSValue proto = JS_GetPropertyStr(ctx, ctor, "prototype");
             JS_SetPropertyStr(ctx, proto, "bridge_dispatch",
-                JS_NewFloat64(ctx, (double)(intptr_t)disp));
+                bridgeDispatchToJSValue(ctx, disp));
             JS_FreeValue(ctx, proto);
+#if defined(__ANDROID__)
+            __android_log_print(ANDROID_LOG_INFO, "BRIDGE",
+                "bridge_register_js: registered '%s'", fq);
+#else
+            printf("BRIDGE: bridge_register_js: registered '%s'\n", fq);
+#endif
             JS_FreeCString(ctx, fq);
             return JS_UNDEFINED;
         }
@@ -75,6 +80,8 @@ static JSValue bridge_register_js(JSContext *ctx, JSValueConst this_val,
 #if defined(__ANDROID__)
     __android_log_print(ANDROID_LOG_ERROR, "BRIDGE",
         "bridge_register_js: FQN '%s' not found in bridge_table", fq);
+#else
+    printf("BRIDGE: bridge_register_js: FQN '%s' NOT FOUND in bridge_table\n", fq);
 #endif
     JS_ThrowTypeError(ctx, "bridge_register_js: FQN '%s' not found in bridge_table", fq);
     JS_FreeCString(ctx, fq);
@@ -87,7 +94,6 @@ extern "C" __attribute__((used, visibility("default"))) void register_all(JSCont
         JS_NewCFunction(ctx, bridge_register_js, "__bridgeRegister", 2));
     JS_FreeValue(ctx, global);
 }
-#endif
 
 /**
  * This signature satisfies the JSInterruptHandler typedef. It is always installed but only does
@@ -484,15 +490,11 @@ __attribute__((used, visibility("default"))) jobject bridgeForAny(JNIEnv *env, J
       jobject result = nullptr;
       // 1) Try bridge_dispatch
       JSValue disp = JS_GetPropertyStr(ctx, *val, "bridge_dispatch");
-      if (!JS_IsUndefined(disp)) {
-        auto* d = (JniBridgeDispatch*)(intptr_t)JS_VALUE_GET_FLOAT64(disp);
-        if (d != nullptr) {
-          result = d->toJavaObject(env, ctx, val);
-        }
-        JS_FreeValue(ctx, disp);
+      auto* d = bridgeDispatchFromJSValue(disp);
+      JS_FreeValue(ctx, disp);
+      if (d != nullptr) {
+        result = d->toJavaObject(env, ctx, val);
         if (result) return result;
-      } else {
-        JS_FreeValue(ctx, disp);
       }
       // 2) Try Kotlin/JS Long
       result = bridgeTryUnwrapLong(env, ctx, val);
@@ -566,16 +568,12 @@ Context::toJavaObject(JNIEnv* env, const JSValueConst& value, bool throwOnUnsupp
       // Try bridge_dispatch
       {
         JSValue disp = JS_GetPropertyStr(jsContext, value, "bridge_dispatch");
-        if (!JS_IsUndefined(disp)) {
-          auto* d = (JniBridgeDispatch*)(intptr_t)JS_VALUE_GET_FLOAT64(disp);
-          if (d != nullptr) {
-            result = d->toJavaObject(env, jsContext, &value);
-          }
-          JS_FreeValue(jsContext, disp);
-          if (result) return result;
-        } else {
-          JS_FreeValue(jsContext, disp);
+        auto* d = bridgeDispatchFromJSValue(disp);
+        if (d != nullptr) {
+          result = d->toJavaObject(env, jsContext, &value);
         }
+        JS_FreeValue(jsContext, disp);
+        if (result) return result;
       }
       // Try Kotlin/JS Long
       {
@@ -938,22 +936,61 @@ static jobject rdmaChangeToJava(JNIEnv* env, const RdmaChange& ch, Context* cont
       return env->CallStaticObjectMethod(context->rdmaBridgeClass, context->rdmaBridgeCreateMove, ch.id, ch.field1, ch.field2, ch.field3, ch.count);
     case RdmaChangeType::BridgeChange: {
       JSValue dispVal = JS_GetPropertyStr(context->jsContext, ch.jsValue, "bridge_dispatch");
-      if (!JS_IsUndefined(dispVal)) {
-        JniBridgeDispatch* disp = (JniBridgeDispatch*)(intptr_t)JS_VALUE_GET_FLOAT64(dispVal);
-        if (disp != nullptr) {
-          jobject uiChange = disp->toJavaObject(env, context->jsContext, ch.jsValue);
+      auto* disp = bridgeDispatchFromJSValue(dispVal);
+      if (disp != nullptr) {
+        jobject uiChange = disp->toJavaObject(env, context->jsContext, &ch.jsValue);
+        if (!uiChange) {
+#ifdef __ANDROID__
+          __android_log_print(ANDROID_LOG_ERROR, "BRIDGE",
+              "rdmaChangeToJava: bridgeChange toJavaObject returned NULL");
+#endif
           JS_FreeValue(context->jsContext, dispVal);
-          if (!uiChange) {
-            JS_FreeValue(context->jsContext, ch.jsValue);
-            return nullptr;
-          }
-          jobject result = env->CallStaticObjectMethod(context->rdmaBridgeClass, context->rdmaBridgeCreateBridgeChange,
-              ch.id, uiChange);
-          env->DeleteLocalRef(uiChange);
           JS_FreeValue(context->jsContext, ch.jsValue);
-          return result;
+          return nullptr;
         }
+#ifdef __ANDROID__
+        // Diagnostic: log JS-side value and resulting Java object
+        {
+          JSValue ctor = JS_GetPropertyStr(context->jsContext, ch.jsValue, "constructor");
+          const char* ctorName = "(unknown)";
+          if (!JS_IsUndefined(ctor)) {
+            JSValue ctorNm = JS_GetPropertyStr(context->jsContext, ctor, "name");
+            ctorName = JS_ToCString(context->jsContext, ctorNm);
+            JS_FreeValue(context->jsContext, ctorNm);
+          }
+          JS_FreeValue(context->jsContext, ctor);
+          JSValue v1 = JS_GetPropertyStr(context->jsContext, ch.jsValue, "value");
+          JSValue v2 = JS_GetPropertyStr(context->jsContext, ch.jsValue, "value_1");
+          JSValue v3 = JS_GetPropertyStr(context->jsContext, ch.jsValue, "tag");
+          JSValue v4 = JS_GetPropertyStr(context->jsContext, ch.jsValue, "tag_1");
+          const char* s1 = JS_ToCString(context->jsContext, v1);
+          const char* s2 = JS_ToCString(context->jsContext, v2);
+          const char* s3 = JS_ToCString(context->jsContext, v3);
+          const char* s4 = JS_ToCString(context->jsContext, v4);
+          __android_log_print(ANDROID_LOG_INFO, "BRIDGE_DIAG",
+              "BridgeChange id=%d ctor=%s value=%s value_1=%s tag=%s tag_1=%s",
+              ch.id,
+              ctorName ? ctorName : "(null)",
+              s1 ? s1 : "(null)",
+              s2 ? s2 : "(null)",
+              s3 ? s3 : "(null)",
+              s4 ? s4 : "(null)");
+          if (s1) JS_FreeCString(context->jsContext, s1);
+          if (s2) JS_FreeCString(context->jsContext, s2);
+          if (s3) JS_FreeCString(context->jsContext, s3);
+          if (s4) JS_FreeCString(context->jsContext, s4);
+          JS_FreeValue(context->jsContext, v1);
+          JS_FreeValue(context->jsContext, v2);
+          JS_FreeValue(context->jsContext, v3);
+          JS_FreeValue(context->jsContext, v4);
+        }
+#endif
+        jobject result = env->CallStaticObjectMethod(context->rdmaBridgeClass, context->rdmaBridgeCreateBridgeChange,
+            ch.id, uiChange);
+        env->DeleteLocalRef(uiChange);
+        JS_FreeValue(context->jsContext, ch.jsValue);
         JS_FreeValue(context->jsContext, dispVal);
+        return result;
       } else {
         JS_FreeValue(context->jsContext, dispVal);
       }
@@ -1078,9 +1115,12 @@ static JSValue rdmaAppendPropertyChange(
   ch.field1 = JS_VALUE_GET_INT(argv[1]);
   ch.field2 = JS_VALUE_GET_INT(argv[2]);
   ch.jsValue = argv[3];
+#ifdef __ANDROID__
+  __android_log_print(ANDROID_LOG_INFO, "BRIDGE_DIAG",
+      "appendPropertyChange id=%d widgetTag=%d propertyTag=%d",
+      ch.id, ch.field1, ch.field2);
+#endif
   context->pendingChanges.push_back(ch);
-  flushIfBatchFull(context);
-  return JS_UNDEFINED;
 }
 
 static JSValue rdmaAppendModifierChange(

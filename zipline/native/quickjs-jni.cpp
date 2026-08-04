@@ -18,6 +18,7 @@
 #include "Context.h"
 #include "InboundCallChannel.h"
 #include "ExceptionThrowers.h"
+#include "bridge_dispatch.h"
 
 extern "C" JNIEXPORT jlong JNICALL
 Java_app_cash_zipline_QuickJs_createContext(JNIEnv* env, jclass type) {
@@ -186,4 +187,12 @@ Java_app_cash_zipline_JniCallChannel_disconnect(JNIEnv* env, jobject thiz, jlong
   }
 
   return channel->disconnect(context, env, instanceName);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_app_cash_zipline_QuickJs_bridgeInitAllNative(JNIEnv* env, jclass, jlong jsContext) {
+  init_all(env);
+  if (jsContext) {
+    register_all((JSContext*)jsContext);
+  }
 }
