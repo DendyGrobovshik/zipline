@@ -262,8 +262,8 @@ internal fun generateNativeBridgeFile(outputDir: String, clazz: IrClass) {
             } else {
               appendLine("    val ${field.name}: Any = bridgeForAny(ctx, ${field.name}Raw)!!")
             }
+            appendLine("    JS_FreeValue(ctx, ${field.name}Raw)")
           }
-          appendLine("    JS_FreeValue(ctx, ${field.name}Raw)")
         }
         else -> {
           appendLine("    val ${field.name}Raw = JS_GetPropertyStr(ctx, jsVal, \"$propName\")")
