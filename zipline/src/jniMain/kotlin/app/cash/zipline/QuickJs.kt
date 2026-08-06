@@ -115,6 +115,10 @@ actual class QuickJs private constructor(
     return execute(bytecode)
   }
 
+  actual fun evaluateForBridge(script: String, fileName: String): Any? {
+    return evaluate(script, fileName)
+  }
+
   internal actual fun initOutboundChannel(outboundChannel: CallChannel) {
     setOutboundCallChannel(context, OUTBOUND_CHANNEL_NAME, outboundChannel)
   }

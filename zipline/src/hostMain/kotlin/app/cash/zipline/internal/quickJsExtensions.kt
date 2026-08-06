@@ -20,7 +20,7 @@ internal fun QuickJs.getGlobalThis(key: String): String? {
 
 internal fun getLog(quickJs: QuickJs): String? = quickJs.getGlobalThis("log")
 
-internal fun initModuleLoader(quickJs: QuickJs) {
+public fun initModuleLoader(quickJs: QuickJs) {
   quickJs.evaluate(DEFINE_JS, "define.js")
   // Register __bridgeRegister JS function on globalThis (C side).
   // Runs before any modules load, so generated .kt files can call it.
@@ -34,7 +34,7 @@ internal fun loadJsModule(quickJs: QuickJs, script: String, id: String) {
   logBridgeDiagnostics(quickJs)
 }
 
-internal fun loadJsModule(quickJs: QuickJs, id: String, bytecode: ByteArray) {
+public fun loadJsModule(quickJs: QuickJs, id: String, bytecode: ByteArray) {
   quickJs.evaluate("globalThis.$CURRENT_MODULE_ID = '$id';")
   quickJs.execute(bytecode)
   quickJs.evaluate("delete globalThis.$CURRENT_MODULE_ID;")

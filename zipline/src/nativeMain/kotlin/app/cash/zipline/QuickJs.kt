@@ -301,6 +301,16 @@ actual class QuickJs private constructor(
     return execute(bytecode)
   }
 
+  actual fun evaluateForBridge(script: String, fileName: String): Any? {
+    checkNotClosed()
+
+    val bytecode = compile(script, fileName)
+    val raw = executeRaw(bytecode)
+    val result = bridgeForAny(context, raw)
+    JS_FreeValue(context, raw)
+    return result
+  }
+
   actual fun compile(sourceCode: String, fileName: String): ByteArray {
     checkNotClosed()
 
@@ -341,6 +351,17 @@ actual class QuickJs private constructor(
   }
 
   actual fun execute(bytecode: ByteArray): Any? {
+    val value = executeRaw(bytecode)
+    val result = value.toKotlinInstanceOrNull()
+    JS_FreeValue(context, value)
+    return result
+  }
+
+  /**
+   * Loads [bytecode] into this context and evaluates it, returning the raw, owned JS value.
+   * The caller must JS_FreeValue the result.
+   */
+  private fun executeRaw(bytecode: ByteArray): CValue<JSValue> {
     checkNotClosed()
 
     @Suppress("UNCHECKED_CAST") // ByteVar and UByteVar have the same bit layout.
@@ -362,9 +383,7 @@ actual class QuickJs private constructor(
       JS_FreeValue(context, value)
       throwJsException()
     }
-    val result = value.toKotlinInstanceOrNull()
-    JS_FreeValue(context, value)
-    return result
+    return value
   }
 
   internal actual fun initOutboundChannel(outboundChannel: CallChannel) {
