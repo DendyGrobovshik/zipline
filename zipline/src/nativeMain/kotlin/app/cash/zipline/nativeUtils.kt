@@ -27,10 +27,8 @@ import kotlinx.cinterop.NativePlacement
 import kotlinx.cinterop.allocArray
 import kotlinx.cinterop.interpretCPointer
 import kotlinx.cinterop.sizeOf
-import kotlinx.cinterop.COpaquePointer
 import kotlinx.cinterop.CValue
 import kotlinx.cinterop.asStableRef
-import kotlinx.cinterop.invoke
 import kotlinx.cinterop.toCPointer
 import kotlinx.cinterop.toKStringFromUtf8
 import app.cash.zipline.quickjs.JSContext
@@ -74,7 +72,7 @@ internal inline fun <reified T : CVariable> NativePlacement.allocArrayOf(
  * value reads garbage.
  */
 @OptIn(ExperimentalForeignApi::class)
-public inline fun JsNumberToDouble(jsVal: CValue<JSValue>): Double = when (JsValueGetNormTag(jsVal)) {
+fun JsNumberToDouble(jsVal: CValue<JSValue>): Double = when (JsValueGetNormTag(jsVal)) {
   JS_TAG_INT -> JsValueGetInt(jsVal).toDouble()
   else -> JsValueGetFloat64(jsVal)
 }
@@ -84,7 +82,7 @@ public inline fun JsNumberToDouble(jsVal: CValue<JSValue>): Double = when (JsVal
  * and Kotlin/JS Long objects {low_1, high_1}.
  */
 @OptIn(ExperimentalForeignApi::class)
-public inline fun JsNumberToLong(ctx: CPointer<JSContext>, jsVal: CValue<JSValue>): Long = when (JsValueGetNormTag(jsVal)) {
+fun JsNumberToLong(ctx: CPointer<JSContext>, jsVal: CValue<JSValue>): Long = when (JsValueGetNormTag(jsVal)) {
   JS_TAG_INT -> JsValueGetInt(jsVal).toLong()
   JS_TAG_FLOAT64 -> JsValueGetFloat64(jsVal).toLong()
   else -> {
@@ -104,7 +102,7 @@ public inline fun JsNumberToLong(ctx: CPointer<JSContext>, jsVal: CValue<JSValue
  * Used by generated bridge code for elements of unknown type (Any? fields, List elements).
  */
 @OptIn(ExperimentalForeignApi::class)
-public fun bridgeForAny(ctx: CPointer<JSContext>, jsVal: CValue<JSValue>): Any? = when {
+fun bridgeForAny(ctx: CPointer<JSContext>, jsVal: CValue<JSValue>): Any? = when {
   JS_IsNumber(jsVal) != 0 -> JsNumberToDouble(jsVal)
   JS_IsBool(jsVal) != 0 -> (JsValueGetBool(jsVal) != 0)
   JS_IsString(jsVal) != 0 -> {

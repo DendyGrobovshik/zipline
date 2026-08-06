@@ -104,7 +104,7 @@ class ZiplineBridgeKotlinPluginTest {
 
       // toJavaObject function signature (no JNIEXPORT, no jniBridge)
       assertTrue(content.contains("static jobject com_example_Bridged_toJavaObject("))
-      assertTrue(content.contains("JNIEnv *env, JSContext *ctx, const JSValue *jsObj"))
+      assertTrue(content.contains("JNIEnv *env, JSContext *ctx, JSValue jsObj"))
       // No JNIEXPORT / jniBridge
       assertFalse(content.contains("JNIEXPORT"), "Should not contain JNIEXPORT")
       assertFalse(content.contains("jniBridge"), "Should not contain jniBridge")
@@ -116,8 +116,8 @@ class ZiplineBridgeKotlinPluginTest {
         "Should not cast jsValue from jlong")
 
       // Field extraction from JS object
-      assertTrue(content.contains("JS_GetPropertyStr(ctx, *jsObj, \"name\")"))
-      assertTrue(content.contains("JS_GetPropertyStr(ctx, *jsObj, \"age\")"))
+      assertTrue(content.contains("JS_GetPropertyStr(ctx, jsObj, \"name\")"))
+      assertTrue(content.contains("JS_GetPropertyStr(ctx, jsObj, \"age\")"))
 
       // String field conversion
       assertTrue(content.contains("JS_ToCString"))
@@ -261,9 +261,9 @@ class ZiplineBridgeKotlinPluginTest {
       val content = cFile.readText()
 
       // Both inherited and own fields are extracted
-      assertTrue(content.contains("JS_GetPropertyStr(ctx, *jsObj, \"species\")"),
+      assertTrue(content.contains("JS_GetPropertyStr(ctx, jsObj, \"species\")"),
         "Should extract inherited 'species' field")
-      assertTrue(content.contains("JS_GetPropertyStr(ctx, *jsObj, \"breed\")"),
+      assertTrue(content.contains("JS_GetPropertyStr(ctx, jsObj, \"breed\")"),
         "Should extract own 'breed' field")
 
       // Both fields are set after construction
@@ -316,11 +316,11 @@ class ZiplineBridgeKotlinPluginTest {
       val content = cFile.readText()
 
       // String field still extracted directly
-      assertTrue(content.contains("JS_GetPropertyStr(ctx, *jsObj, \"label\")"))
+      assertTrue(content.contains("JS_GetPropertyStr(ctx, jsObj, \"label\")"))
       assertTrue(content.contains("JS_ToCString"))
 
       // Nested object field uses bridge_dispatch property lookup
-      assertTrue(content.contains("JS_GetPropertyStr(ctx, *jsObj, \"child\")"))
+      assertTrue(content.contains("JS_GetPropertyStr(ctx, jsObj, \"child\")"))
       assertTrue(content.contains("JS_GetPropertyStr(ctx, js_child, \"bridge_dispatch\")"))
 
       // TODO comment for pointer compression future
@@ -328,10 +328,10 @@ class ZiplineBridgeKotlinPluginTest {
 
       // Dispatch pointer read via float64
       assertTrue(content.contains(
-        "JniBridgeDispatch *disp_child = (JniBridgeDispatch *)(intptr_t)JS_VALUE_GET_FLOAT64(disp_val_child);"))
+        "BridgeConverterFn disp_child = bridgeConverterFromJSValue(disp_val_child);"))
 
       // Dispatch call
-      assertTrue(content.contains("disp_child->toJavaObject(env, ctx, &js_child)"))
+      assertTrue(content.contains("disp_child(env, ctx, js_child)"))
 
       // Cleanup
       assertTrue(content.contains("JS_FreeValue(ctx, disp_val_child)"))
@@ -489,7 +489,7 @@ class ZiplineBridgeKotlinPluginTest {
       // bridge_dispatch in the object branch
       assertTrue(content.contains("JS_GetPropertyStr(ctx, elem, \"bridge_dispatch\")"))
       assertTrue(content.contains("TODO: when pointer compression lands, use JS_VALUE_GET_INT"))
-      assertTrue(content.contains("JniBridgeDispatch *disp ="))
+      assertTrue(content.contains("BridgeConverterFn disp = bridgeConverterFromJSValue(disp_val)"))
 
       // NewObjectArray
       assertTrue(content.contains("NewObjectArray"))
@@ -689,7 +689,7 @@ class ZiplineBridgeKotlinPluginTest {
 
       // bridge_dispatch lookup inside null check
       assertTrue(content.contains("JS_GetPropertyStr(ctx, js_child, \"bridge_dispatch\")"))
-      assertTrue(content.contains("disp_child->toJavaObject(env, ctx, &js_child)"))
+      assertTrue(content.contains("disp_child(env, ctx, js_child)"))
 
       // Null branch
       assertTrue(content.contains("java_child = NULL;"))
@@ -1102,8 +1102,8 @@ class ZiplineBridgeNativePluginTest {
 
       val content = ktFile.readText()
 
-      // Null check
-      assertTrue(content.contains("if (nameStr == null) null else"))
+      // Null check: JS null/undefined is guarded BEFORE JS_ToCString, since String(null) is "null"
+      assertTrue(content.contains("if (JS_IsUndefined(nameRaw) != 0 || JS_IsNull(nameRaw) != 0) null else"))
       assertTrue(content.contains("toKStringFromUtf8"))
       assertTrue(content.contains("JS_FreeCString"))
     } finally {

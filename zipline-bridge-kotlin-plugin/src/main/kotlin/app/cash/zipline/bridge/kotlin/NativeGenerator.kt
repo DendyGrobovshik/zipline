@@ -7,14 +7,25 @@ import org.jetbrains.kotlin.ir.types.IrSimpleType
 import org.jetbrains.kotlin.ir.types.getClass
 import org.jetbrains.kotlin.ir.util.classId
 import org.jetbrains.kotlin.ir.util.fqNameWhenAvailable
+import org.jetbrains.kotlin.ir.util.hasAnnotation
+import org.jetbrains.kotlin.name.FqName
 
 // -- Kotlin/Native bridge code generation (iOS) --
 
+/** Marker for Redwood's generated-code-only APIs; the opt-in is only needed when the bridged class uses them. */
+private val REDWOOD_CODEGEN_API_FQN = FqName("app.cash.redwood.RedwoodCodegenApi")
 
 internal fun generateNativeBridgeFile(outputDir: String, clazz: IrClass) {
   val fqn = clazz.fqNameWhenAvailable?.asString() ?: return
   val functionName = "${clazz.name.asString()}_toKotlin"
   val fields = extractFields(clazz)
+
+  // The generated code constructs the bridged class (and, for nested classes, its enclosing
+  // class). If any of those is marked @RedwoodCodegenApi, the file must opt in — but only
+  // then, so zipline-only builds never reference the Redwood annotation.
+  val usesRedwoodCodegenApi =
+    clazz.hasAnnotation(REDWOOD_CODEGEN_API_FQN) ||
+      (clazz.parent as? IrClass)?.hasAnnotation(REDWOOD_CODEGEN_API_FQN) == true
 
   // Skip classes with unsupported field types (Function*, FloatArray, List — generic type lost in IR)
   val hasUnsupported = fields.any {
@@ -43,7 +54,11 @@ internal fun generateNativeBridgeFile(outputDir: String, clazz: IrClass) {
     appendLine("// GENERATED FILE. DO NOT MODIFY MANUALLY.")
     appendLine()
     appendLine("@file:Suppress(\"UNUSED_PARAMETER\", \"unused\", \"INVISIBLE_MEMBER\", \"INVISIBLE_REFERENCE\", \"UNCHECKED_CAST\")")
-    appendLine("@file:OptIn(app.cash.redwood.RedwoodCodegenApi::class, kotlinx.cinterop.ExperimentalForeignApi::class)")
+    if (usesRedwoodCodegenApi) {
+      appendLine("@file:OptIn(app.cash.redwood.RedwoodCodegenApi::class, kotlinx.cinterop.ExperimentalForeignApi::class)")
+    } else {
+      appendLine("@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)")
+    }
     appendLine("package generated_bridges")
     appendLine()
     appendLine("import kotlinx.cinterop.*")
@@ -142,7 +157,11 @@ internal fun generateNativeBridgeFile(outputDir: String, clazz: IrClass) {
         }
         field.ktType == "kotlin.Int" -> {
           appendLine("    val ${field.name}Raw = JS_GetPropertyStr(ctx, jsVal, \"$propName\")")
-          appendLine("    val ${field.name} = JsValueGetInt(${field.name}Raw${if (field.isNullable) ".takeUnless { JS_IsUndefined(${field.name}Raw) != 0 || JS_IsNull(${field.name}Raw) != 0 }" else ""})")
+          if (field.isNullable) {
+            appendLine("    val ${field.name} = if (JS_IsUndefined(${field.name}Raw) != 0 || JS_IsNull(${field.name}Raw) != 0) null else JsValueGetInt(${field.name}Raw)")
+          } else {
+            appendLine("    val ${field.name} = JsValueGetInt(${field.name}Raw)")
+          }
           appendLine("    JS_FreeValue(ctx, ${field.name}Raw)")
         }
         field.ktType == "kotlin.Boolean" -> {
@@ -183,11 +202,11 @@ internal fun generateNativeBridgeFile(outputDir: String, clazz: IrClass) {
         }
         field.ktType == "kotlin.String" -> {
           appendLine("    val ${field.name}Raw = JS_GetPropertyStr(ctx, jsVal, \"$propName\")")
-          appendLine("    val ${field.name}Str = JS_ToCString(ctx, ${field.name}Raw)")
           if (field.isNullable) {
-            appendLine("    val ${field.name} = if (${field.name}Str == null) null else ${field.name}Str.toKStringFromUtf8().also { JS_FreeCString(ctx, ${field.name}Str) }")
+            // Guard JS null/undefined BEFORE JS_ToCString: String(null) is "null", not null.
+            appendLine("    val ${field.name} = if (JS_IsUndefined(${field.name}Raw) != 0 || JS_IsNull(${field.name}Raw) != 0) null else { val s = JS_ToCString(ctx, ${field.name}Raw); s?.toKStringFromUtf8()?.also { JS_FreeCString(ctx, s) } }")
           } else {
-            appendLine("    val ${field.name} = ${field.name}Str?.toKStringFromUtf8().also { JS_FreeCString(ctx, ${field.name}Str) } ?: \"\"")
+            appendLine("    val ${field.name} = JS_ToCString(ctx, ${field.name}Raw)?.toKStringFromUtf8() ?: \"\"")
           }
           appendLine("    JS_FreeValue(ctx, ${field.name}Raw)")
         }
