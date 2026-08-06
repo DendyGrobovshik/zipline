@@ -3,13 +3,10 @@ package app.cash.zipline.bridge.kotlin
 import org.jetbrains.kotlin.descriptors.ClassKind
 import org.jetbrains.kotlin.ir.declarations.IrClass
 import org.jetbrains.kotlin.ir.declarations.IrConstructor
-import org.jetbrains.kotlin.ir.declarations.IrParameterKind
 import org.jetbrains.kotlin.ir.types.IrSimpleType
 import org.jetbrains.kotlin.ir.types.getClass
-import org.jetbrains.kotlin.ir.types.isMarkedNullable
 import org.jetbrains.kotlin.ir.util.classId
 import org.jetbrains.kotlin.ir.util.fqNameWhenAvailable
-import java.io.File
 
 // -- Kotlin/Native bridge code generation (iOS) --
 
@@ -28,7 +25,6 @@ internal fun generateNativeBridgeFile(outputDir: String, clazz: IrClass) {
 
   // Collect wrapper names and full types for Dp-like erased value classes and generic params
   val wrapperByField = mutableMapOf<String, String>()
-  val ctorParamTypeStr = mutableMapOf<String, String>()
   for (constructor in clazz.declarations.filterIsInstance<IrConstructor>().filter { it.isPrimary }) {
     val params = constructor.parameters
       .filter { it.kind == org.jetbrains.kotlin.ir.declarations.IrParameterKind.Regular }
@@ -90,9 +86,6 @@ internal fun generateNativeBridgeFile(outputDir: String, clazz: IrClass) {
     // Generate field reads
     for (field in fields) {
       val propName = field.jsPropertyName
-      val nullableCheck = if (field.isNullable) {
-        "JS_IsUndefined(${field.name}Raw) != 0 || JS_IsNull(${field.name}Raw) != 0 -> null\n    "
-      } else ""
 
       when {
         field.isInline && field.underlyingKtType == "kotlin.Int" -> {
@@ -328,7 +321,6 @@ internal fun generateNativeBridgeFile(outputDir: String, clazz: IrClass) {
 /** Generate per-class native bridge files. Each file self-registers via @EagerInitialization. */
 internal fun generateNativeBridges(outputDir: String, dispatchClasses: List<IrClass>) {
   for (clazz in dispatchClasses) {
-    val fqn = clazz.fqNameWhenAvailable?.asString() ?: continue
     generateNativeBridgeFile(outputDir, clazz)
   }
 }

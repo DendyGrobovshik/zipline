@@ -15,9 +15,6 @@ import org.jetbrains.kotlin.ir.util.classId
 import org.jetbrains.kotlin.ir.util.fqNameWhenAvailable
 import org.jetbrains.kotlin.ir.util.hasAnnotation
 import org.jetbrains.kotlin.ir.util.properties
-import org.jetbrains.kotlin.name.ClassId
-import org.jetbrains.kotlin.name.FqName
-import org.jetbrains.kotlin.name.Name
 
 // -- Field extraction and class discovery (shared between C, Native, and JS generators) --
 
@@ -81,28 +78,25 @@ internal fun extractFields(annotatedClass: IrClass, includeValBodyFields: Boolea
   for (prop in allProperties) {
     nameCounts[prop.name.asString()] = nameCounts.getOrDefault(prop.name.asString(), 0) + 1
   }
-  val overriddenNames = nameCounts.filter { (name, count) -> count > 1 && name in ownPropertyNames }.keys.toMutableSet()
   // Also check supertypes without @WithJS2HostBridge — Kotlin/JS IR mangles
   // override val properties to name_1 even when the supertype isn't annotated.
   // collectProperties only recurses into annotated supertypes, so interface
   // properties (like Clip.shape) are missed. We scan all supertype properties
   // here to detect overrides that would trigger name mangling.
+  val overriddenNames = mutableSetOf<String>()
   val visitedForOverride = mutableSetOf<IrClass>()
-  fun collectOverrideNames(cls: IrClass) {
+  fun collectOverrideNames(tp: IrType) {
+    val cls = tp.getClass() ?: return
     if (!visitedForOverride.add(cls)) return
-    for (superType in cls.superTypes) {
-      val superClass = superType.getClass() ?: continue
-      for (prop in superClass.properties) {
-        val name = prop.name.asString()
-        if (name in ownPropertyNames) {
-          overriddenNames.add(name)
-        }
+    for (prop in cls.properties) {
+      val name = prop.name.asString()
+      if (name in ownPropertyNames) {
+        overriddenNames.add(name)
       }
-      collectOverrideNames(superClass)
     }
+    cls.superTypes.forEach(::collectOverrideNames)
   }
-  collectOverrideNames(annotatedClass)
-
+  annotatedClass.superTypes.forEach(::collectOverrideNames)
 
   // Track which property names have a backing field anywhere in the hierarchy.
   // Used later to distinguish inherited-backed from inherited-computed.
@@ -150,15 +144,9 @@ internal fun extractFields(annotatedClass: IrClass, includeValBodyFields: Boolea
         ?: underlyingType?.classFqName?.asString()
       // Only unwrap non-nullable inline classes: nullable ones keep their
       // inline class type in JVM bytecode descriptors.
-      val isNullable = (propertyType as? IrSimpleType)?.isMarkedNullable() ?: false
-      if (!isNullable && underlyingKtType != null && isKnownType(underlyingKtType)) {
+      if (!propertyType.isMarkedNullable() && underlyingKtType != null && isKnownType(underlyingKtType)) {
         effectiveKtType = underlyingKtType
       }
-    }
-
-    // Save the wrapper type for ANY value class that got unwrapped
-    if (ktType != effectiveKtType && wrapperKtType == null) {
-      wrapperKtType = ktType
     }
 
     // Kotlin/JS IR always mangles override val backing fields to name_1.
@@ -174,7 +162,7 @@ internal fun extractFields(annotatedClass: IrClass, includeValBodyFields: Boolea
     // the primitive underlying type for value classes (Id → int, Dp → double).
     val isKnown = isKnownType(effectiveKtType)
     val jniFieldType = if (isKnown) kotlinToJniFieldType[effectiveKtType]!!
-      else if (irClass != null) jniFieldDescriptorForClass(irClass)
+      else if (irClass != null) jniTypeDescriptorForClass(irClass)
       else jniFieldDescriptor(effectiveKtType)
     val name = property.name.asString()
     val isConstructorParam = name in primaryConstructorParamNames
@@ -255,7 +243,7 @@ internal fun isInlineClass(irClass: IrClass): Boolean {
 
 // -- JNI type helpers (used by field extraction) --
 
-internal fun jniFieldDescriptorForClass(irClass: IrClass): String {
+internal fun jniTypeDescriptorForClass(irClass: IrClass): String {
   val fqName = irClass.fqNameWhenAvailable?.asString() ?: irClass.name.asString()
   val remapped = kotlinToJvmClass[fqName]
   if (remapped != null) return "L${remapped.replace('.', '/')};"

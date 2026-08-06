@@ -1074,6 +1074,7 @@ static JSValue rdmaAppendPropertyChange(
   ch.jsValue = JS_DupValue(ctx, argv[3]);
 
   context->pendingChanges.push_back(ch);
+  return JS_UNDEFINED;
 }
 
 static JSValue rdmaAppendModifierChange(

@@ -1,14 +1,8 @@
 package app.cash.zipline.bridge.kotlin
 
 import org.jetbrains.kotlin.ir.declarations.IrClass
-import org.jetbrains.kotlin.ir.types.IrSimpleType
-import org.jetbrains.kotlin.ir.types.getClass
-import org.jetbrains.kotlin.ir.types.classFqName
 import org.jetbrains.kotlin.ir.util.fqNameWhenAvailable
-import org.jetbrains.kotlin.ir.util.properties
-import org.jetbrains.kotlin.ir.declarations.IrConstructor
 import org.jetbrains.kotlin.ir.declarations.IrDeclarationParent
-import org.jetbrains.kotlin.ir.declarations.IrParameterKind
 import org.jetbrains.kotlin.descriptors.ClassKind
 import org.jetbrains.kotlin.name.FqName
 import java.io.File
@@ -36,7 +30,7 @@ internal fun buildJniClassName(irClass: IrClass): String {
   val classSegments = segments.takeLast(classDepth)
 
   val packagePart = packageSegments.joinToString("/")
-  val classPart = classSegments.joinToString("\$")
+  val classPart = classSegments.joinToString("$")
 
   return if (packagePart.isEmpty()) classPart else "$packagePart/$classPart"
 }
@@ -320,7 +314,7 @@ internal fun generateBridgeFile(outputDir: String, annotatedClass: IrClass) {
           emitCollectionExtraction(this, field)
         }
         field.ktType == "kotlin.Any" -> {
-          emitAnyFieldExtraction(this, field, jniClassName)
+          emitAnyFieldExtraction(this, field)
         }
         field.isArray -> {
           emitArrayExtraction(this, field)
@@ -661,7 +655,6 @@ internal fun emitNullablePrimitiveExtraction(
 internal fun emitAnyFieldExtraction(
   sb: StringBuilder,
   field: FieldInfo,
-  jniClassName: String,
 ) {
   val javaVar = "java_${field.name}"
   sb.appendLine("        // Any? field — delegate to bridgeForAny")

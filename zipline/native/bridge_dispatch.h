@@ -29,18 +29,22 @@ typedef jobject (*BridgeConverterFn)(JNIEnv *env, JSContext *ctx, JSValue jsObj)
 
 /** Pack a bridge converter pointer into a JSValue (as float64, bit-preserving). */
 static inline JSValue bridgeConverterToJSValue(JSContext* ctx, BridgeConverterFn fn) {
-    const void* ptr = (const void*)fn;
-    double d;
-    memcpy(&d, &ptr, sizeof(d));
-    return JS_NewFloat64(ctx, d);
+    union {
+        double d;
+        BridgeConverterFn fn;
+    } u;
+    u.fn = fn;
+    return JS_NewFloat64(ctx, u.d);
 }
 /** Unpack a JSValue (float64) back to a bridge converter. Returns NULL if undefined. */
 static inline BridgeConverterFn bridgeConverterFromJSValue(JSValue v) {
     if (JS_IsUndefined(v)) return NULL;
-    double d = JS_VALUE_GET_FLOAT64(v);
-    void* ptr;
-    memcpy(&ptr, &d, sizeof(ptr));
-    return (BridgeConverterFn)ptr;
+    union {
+        double d;
+        BridgeConverterFn fn;
+    } u;
+    u.d = JS_VALUE_GET_FLOAT64(v);
+    return u.fn;
 }
 /** Register a JNI init function (caches class/method refs on JVM thread). */
 void addBridgeInit(void (*fn)(JNIEnv* env));
