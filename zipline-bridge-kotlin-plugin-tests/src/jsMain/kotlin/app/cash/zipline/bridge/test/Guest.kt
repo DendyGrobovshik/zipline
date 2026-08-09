@@ -15,6 +15,12 @@ fun provideBridgedInline(): BridgedInline = BridgedTestValues.inline
 fun provideBridgedInlineHolder(): BridgedInlineHolder = BridgedTestValues.inlineHolder
 
 @JsExport
+fun provideBridgedFloatHolder(): BridgedFloatHolder = BridgedTestValues.floatHolder
+
+@JsExport
+fun provideBridgedDoubleHolder(): BridgedDoubleHolder = BridgedTestValues.doubleHolder
+
+@JsExport
 fun provideBridgedListHolder(): BridgedListHolder = BridgedTestValues.listHolder
 
 @JsExport

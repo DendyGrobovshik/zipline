@@ -77,87 +77,18 @@ internal fun extractFields(annotatedClass: IrClass, includeValBodyFields: Boolea
 }
 
 private fun extractField(property: IrProperty, primaryConstructorParamNames: Set<String>, includeValBodyFields: Boolean): FieldInfo? {
-  val propertyType = property.getter?.returnType
-    ?: return null
-
-  val irClass = (propertyType as? IrSimpleType)?.getClass()
-  val ktType = propertyType.classFqName?.asString() ?: return null
-
-  // Detect inline value classes and unwrap to underlying type
-  var isInline = false
-  var underlyingKtType: String? = null
-  var effectiveKtType = ktType
-  var wrapperKtType: String? = null
-  if (irClass != null && isInlineClass(irClass)) {
-    isInline = true
-    wrapperKtType = ktType  // save original wrapper before unwrap
-    val primaryCtor = irClass.declarations
-      .filterIsInstance<IrConstructor>()
-      .firstOrNull { it.isPrimary }
-    val underlyingParam = primaryCtor?.parameters
-      ?.firstOrNull { it.kind == IrParameterKind.Regular }
-    val underlyingType = underlyingParam?.type
-    underlyingKtType = underlyingType?.classFqName?.asString()
-    // Only unwrap non-nullable inline classes: nullable ones keep their
-    // inline class type in JVM bytecode descriptors.
-    if (!propertyType.isMarkedNullable() && underlyingKtType != null && isKnownType(underlyingKtType)) {
-      effectiveKtType = underlyingKtType
-    }
-  }
-
-  val jsPropertyName = property.jsName()
-
-  // JNI type detection uses effectiveKtType (after inline unwrapping) to get
-  // the primitive underlying type for value classes (Id → int, Dp → double).
-  val isKnown = isKnownType(effectiveKtType)
-  val jniFieldType = if (isKnown) kotlinToJniFieldType[effectiveKtType]!!
-  else if (irClass != null) jniTypeDescriptorForClass(irClass)
-  else jniFieldDescriptor(effectiveKtType)
+  val type = property.getter?.returnType ?: return null
   val name = property.name.asString()
   val isConstructorParam = name in primaryConstructorParamNames
-  // Skip computed getters: no backing field anywhere in the hierarchy.
+
   if (!isConstructorParam && !property.hasBackingField()) return null
-
-  // Computed vals can't be reassigned in Native codegen; C codegen reads them via JS_GetPropertyStr.
   if (!isConstructorParam && !property.isVar && !includeValBodyFields) return null
-
-  // Detect array fields
-  val isArray = effectiveKtType in arrayKotlinTypes
-  // Extract element type info for Array<T>
-  val elementIrType = if (effectiveKtType == "kotlin.Array" || effectiveKtType == "kotlin.collections.List") {
-    (propertyType as? IrSimpleType)?.arguments
-      ?.firstOrNull()
-      ?.let { (it as? IrTypeProjection)?.type ?: (it as? IrType) }
-  } else { null }
-  val arrayElementType = elementIrType?.getClass()?.classId?.asSingleFqName()?.asString()
-    ?: elementIrType?.classFqName?.asString()
-  val arrayElementNullable = (elementIrType as? IrSimpleType)?.isMarkedNullable() ?: false
-
-  // Detect nullability
-  val isNullable = (propertyType as? IrSimpleType)?.isMarkedNullable() ?: false
-
-  // Nullable primitives use boxed JNI descriptors and are not JNI primitives
-  val isNullablePrimitive = isNullable && isKnown && isJniPrimitive(effectiveKtType)
-  val effectiveJniFieldType = if (isNullablePrimitive) boxedJniDescriptor[effectiveKtType] ?: jniFieldType else jniFieldType
-  val effectiveIsPrimitive = isKnown && isJniPrimitive(effectiveKtType) && !isNullable
-  val effectiveIsObjectType = !isKnown && !isArray
 
   return FieldInfo(
     name = name,
-    ktType = effectiveKtType,
-    jniTypeChar = effectiveJniFieldType,
-    jniFieldType = effectiveJniFieldType,
-    isPrimitive = effectiveIsPrimitive,
-    isObjectType = effectiveIsObjectType,
+    type = type,
     isConstructorParam = isConstructorParam,
-    isArray = isArray,
-    arrayElementType = arrayElementType,
-    arrayElementNullable = arrayElementNullable,
-    isNullable = isNullable,
-    isInline = isInline,
-    underlyingKtType = underlyingKtType,
-    wrapperKtType = wrapperKtType,
-    jsPropertyName = jsPropertyName,
+    jsPropertyName = property.jsName(),
   )
 }
 

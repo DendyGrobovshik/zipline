@@ -16,58 +16,69 @@ data class FieldInfo(
   val isConstructorParam: Boolean,
   val jsPropertyName: String,
 ) {
-  val ktType: String get() = type.classFqName?.asString() ?: ""
-  val isNullable: Boolean get() = (type as? IrSimpleType)?.isMarkedNullable() ?: false
+  val ktType: String by lazy { type.classFqName?.asString() ?: "" }
+  val isNullable: Boolean by lazy { (type as? IrSimpleType)?.isMarkedNullable() ?: false }
 
-  val irClass: IrClass? get() = (type as? IrSimpleType)?.getClass()
+  val irClass: IrClass? by lazy { (type as? IrSimpleType)?.getClass() }
 
-  val isInline: Boolean get() = irClass?.let { isInlineClass(it) } ?: false
+  val isInline: Boolean by lazy { irClass?.let { isInlineClass(it) } ?: false }
 
-  val underlyingKtType: String? get() = if (isInline) {
-    irClass?.declarations
-      ?.filterIsInstance<org.jetbrains.kotlin.ir.declarations.IrConstructor>()
-      ?.firstOrNull { it.isPrimary }
-      ?.parameters
-      ?.firstOrNull { it.kind == org.jetbrains.kotlin.ir.declarations.IrParameterKind.Regular }
-      ?.type?.classFqName?.asString()
-  } else null
+  val underlyingKtType: String? by lazy {
+    if (isInline) {
+      irClass?.declarations
+        ?.filterIsInstance<org.jetbrains.kotlin.ir.declarations.IrConstructor>()
+        ?.firstOrNull { it.isPrimary }
+        ?.parameters
+        ?.firstOrNull { it.kind == org.jetbrains.kotlin.ir.declarations.IrParameterKind.Regular }
+        ?.type?.classFqName?.asString()
+    } else null
+  }
 
-  val wrapperKtType: String? get() = if (isInline) ktType else null
+  val wrapperKtType: String? by lazy { if (isInline) ktType else null }
 
-  val effectiveKtType: String get() {
+  val effectiveKtType: String by lazy {
     val underlying = underlyingKtType
-    return if (isInline && !isNullable && underlying != null && isKnownType(underlying)) underlying else ktType
+    if (isInline && !isNullable && underlying != null && isKnownType(underlying)) underlying else ktType
   }
 
-  val jniFieldType: String get() {
+  val jniFieldType: String by lazy {
     val typeStr = effectiveKtType
-    return if (isKnownType(typeStr)) kotlinToJniFieldType[typeStr]!!
-    else irClass?.let { jniTypeDescriptorForClass(it) }
-    ?: jniFieldDescriptor(typeStr)
+    when {
+      isKnownType(typeStr) -> {
+        // Nullable primitives are stored as their boxed JNI type (e.g. Integer for Int?).
+        if (isNullable && isJniPrimitive(typeStr)) {
+          boxedJniDescriptor[typeStr] ?: kotlinToJniFieldType[typeStr]!!
+        } else {
+          kotlinToJniFieldType[typeStr]!!
+        }
+      }
+      else -> irClass?.let { jniTypeDescriptorForClass(it) } ?: jniFieldDescriptor(typeStr)
+    }
   }
 
-  val jniTypeChar: String get() = jniFieldType.firstOrNull()?.toString() ?: ""
+  // Full JNI descriptor for constructor signatures; may be multi-character (e.g. "Ljava/lang/Integer;").
+  val jniTypeChar: String by lazy { jniFieldType }
 
-  val isPrimitive: Boolean get() = isKnownType(effectiveKtType) && isJniPrimitive(effectiveKtType) && !isNullable
+  val isPrimitive: Boolean by lazy {
+    isKnownType(effectiveKtType) && isJniPrimitive(effectiveKtType) && !isNullable
+  }
 
-  val isObjectType: Boolean get() = !isKnownType(effectiveKtType) && !isArray
+  val isObjectType: Boolean by lazy { !isKnownType(effectiveKtType) && !isArray }
 
-  val isArray: Boolean get() = effectiveKtType in arrayKotlinTypes
+  val isArray: Boolean by lazy { effectiveKtType in arrayKotlinTypes }
 
-  val arrayElementType: String? get() = if (isArray) {
-    (type as? IrSimpleType)?.arguments
-      ?.firstOrNull()
-      ?.let { (it as? org.jetbrains.kotlin.ir.types.IrTypeProjection)?.type ?: (it as? IrType) }
-      ?.let { it.classFqName?.asString() }
-  } else null
+  /** Element type for Array<T> and List<T>; null when the generic argument is not available. */
+  private val elementIrType: IrType? by lazy {
+    if (isArray || effectiveKtType == "kotlin.collections.List") {
+      (type as? IrSimpleType)?.arguments
+        ?.firstOrNull()
+        ?.let { (it as? org.jetbrains.kotlin.ir.types.IrTypeProjection)?.type ?: (it as? IrType) }
+    } else null
+  }
 
-  val arrayElementNullable: Boolean get() = if (isArray) {
-    (type as? IrSimpleType)?.arguments
-      ?.firstOrNull()
-      ?.let { (it as? org.jetbrains.kotlin.ir.types.IrTypeProjection)?.type ?: (it as? IrType) }
-      ?.let { (it as? IrSimpleType)?.isMarkedNullable() ?: false }
-      ?: false
-  } else false
+  val arrayElementType: String? by lazy { elementIrType?.classFqName?.asString() }
+
+  val arrayElementNullable: Boolean by lazy { (elementIrType as? IrSimpleType)?.isMarkedNullable() ?: false }
 }
 
 // -- JNI info data classes --

@@ -25,6 +25,14 @@ data class BridgedData(
 @JvmInline
 value class BridgedInline(val raw: Int)
 
+@WithJS2HostBridge
+@JvmInline
+value class BridgedFloat(val raw: Float)
+
+@WithJS2HostBridge
+@JvmInline
+value class BridgedDouble(val raw: Double)
+
 /**
  * Inline classes can only be bridged as fields (or list elements): Kotlin/JS inlines a
  * standalone value-class return value to the underlying primitive, which carries no
@@ -32,6 +40,12 @@ value class BridgedInline(val raw: Int)
  */
 @WithJS2HostBridge
 data class BridgedInlineHolder(val inlineValue: BridgedInline)
+
+@WithJS2HostBridge
+data class BridgedFloatHolder(val floatValue: BridgedFloat)
+
+@WithJS2HostBridge
+data class BridgedDoubleHolder(val doubleValue: BridgedDouble)
 
 @WithJS2HostBridge
 data class BridgedListHolder(val items: List<Int>)
@@ -175,6 +189,10 @@ object BridgedTestValues {
   val data = BridgedData(id = 7, name = "seven", active = true, ratio = 1.5)
   val inline = BridgedInline(raw = 42)
   val inlineHolder = BridgedInlineHolder(inlineValue = inline)
+  val float = BridgedFloat(raw = 1.5f)
+  val floatHolder = BridgedFloatHolder(floatValue = float)
+  val double = BridgedDouble(raw = 2.5)
+  val doubleHolder = BridgedDoubleHolder(doubleValue = double)
   val listHolder = BridgedListHolder(items = listOf(1, 2, 3))
   val nested = BridgedNested(outer = data)
   val nullableNull = BridgedNullable(text = null, count = null)

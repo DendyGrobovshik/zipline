@@ -214,8 +214,10 @@ internal fun generateBridgeFile(outputDir: String, annotatedClass: IrClass) {
     // Extract each field from the JS object
     for (field in fields) {
       val nullablePrimitive = field.isNullable && isKnownType(field.ktType) && isJniPrimitive(field.ktType)
+      // Non-nullable inline value classes are erased to their underlying JNI primitive on JVM,
+      // so dispatch on effectiveKtType (unwrapped) for the primitive branches.
       val cType = if (nullablePrimitive) "jobject"
-        else kotlinToCType[field.ktType] ?: "jobject"
+        else kotlinToCType[field.effectiveKtType] ?: "jobject"
       // JVM value for the field
       val javaVar = "java_${field.name}"
 
@@ -253,19 +255,19 @@ internal fun generateBridgeFile(outputDir: String, annotatedClass: IrClass) {
         field.isNullable && isKnownType(field.ktType) && isJniPrimitive(field.ktType) -> {
           emitNullablePrimitiveExtraction(this, field)
         }
-        field.ktType == "kotlin.Boolean" -> {
+        field.effectiveKtType == "kotlin.Boolean" -> {
           appendLine("        $javaVar = (jboolean)JS_VALUE_GET_BOOL(js_${field.name});")
         }
-        field.ktType == "kotlin.Byte" -> {
+        field.effectiveKtType == "kotlin.Byte" -> {
           appendLine("        $javaVar = (jbyte)JS_VALUE_GET_INT(js_${field.name});")
         }
-        field.ktType == "kotlin.Short" -> {
+        field.effectiveKtType == "kotlin.Short" -> {
           appendLine("        $javaVar = (jshort)JS_VALUE_GET_INT(js_${field.name});")
         }
-        field.ktType == "kotlin.Int" -> {
+        field.effectiveKtType == "kotlin.Int" -> {
           appendLine("        $javaVar = (jint)JS_VALUE_GET_INT(js_${field.name});")
         }
-        field.ktType == "kotlin.Long" -> {
+        field.effectiveKtType == "kotlin.Long" -> {
           appendLine("        int tag_${field.name} = JS_VALUE_GET_NORM_TAG(js_${field.name});")
           appendLine("        if (tag_${field.name} == JS_TAG_FLOAT64) {")
           appendLine("            $javaVar = (jlong)JS_VALUE_GET_FLOAT64(js_${field.name});")
@@ -287,8 +289,8 @@ internal fun generateBridgeFile(outputDir: String, annotatedClass: IrClass) {
           appendLine("            $javaVar = 0;")
           appendLine("        }")
         }
-        field.ktType == "kotlin.Float" || field.ktType == "kotlin.Double" -> {
-          val cast = if (field.ktType == "kotlin.Float") "(jfloat)" else "(jdouble)"
+        field.effectiveKtType == "kotlin.Float" || field.effectiveKtType == "kotlin.Double" -> {
+          val cast = if (field.effectiveKtType == "kotlin.Float") "(jfloat)" else "(jdouble)"
           appendLine("        int tag_${field.name}_d = JS_VALUE_GET_NORM_TAG(js_${field.name});")
           appendLine("        if (tag_${field.name}_d == JS_TAG_FLOAT64) {")
           appendLine("            $javaVar = ${cast}JS_VALUE_GET_FLOAT64(js_${field.name});")
@@ -302,18 +304,18 @@ internal fun generateBridgeFile(outputDir: String, annotatedClass: IrClass) {
           appendLine("            $javaVar = 0;")
           appendLine("        }")
         }
-        field.ktType == "kotlin.Char" -> {
+        field.effectiveKtType == "kotlin.Char" -> {
           appendLine("        $javaVar = (jchar)JS_VALUE_GET_INT(js_${field.name});")
         }
-        field.ktType == "kotlin.String" -> {
+        field.effectiveKtType == "kotlin.String" -> {
           appendLine("        const char *str_${field.name} = JS_ToCString(ctx, js_${field.name});")
           appendLine("        $javaVar = (*env)->NewStringUTF(env, str_${field.name});")
           appendLine("        JS_FreeCString(ctx, str_${field.name});")
         }
-        field.ktType in kotlinToJvmClass -> {
+        field.effectiveKtType in kotlinToJvmClass -> {
           emitCollectionExtraction(this, field)
         }
-        field.ktType == "kotlin.Any" -> {
+        field.effectiveKtType == "kotlin.Any" -> {
           emitAnyFieldExtraction(this, field)
         }
         field.isArray -> {
@@ -401,7 +403,9 @@ internal fun generateBridgeFile(outputDir: String, annotatedClass: IrClass) {
 
     if (isInlineClass(annotatedClass) && !isObject && constructorFields.size == 1) {
       val underlyingField = constructorFields[0]
-      val underlyingCType = kotlinToCType[underlyingField.ktType] ?: "jobject"
+      // The underlying type may itself be an inline class (e.g. SpaceArrangement(val spacing: Dp));
+      // use effectiveKtType to reach the primitive C type.
+      val underlyingCType = kotlinToCType[underlyingField.effectiveKtType] ?: "jobject"
       appendLine()
       appendLine("jobject ${functionPrefix}_fromValue(JNIEnv *env, JSContext *ctx, JSValue jsVal) {")
       appendLine("    ${functionPrefix}_init(env);")
@@ -413,7 +417,7 @@ internal fun generateBridgeFile(outputDir: String, annotatedClass: IrClass) {
       appendLine("            java_v = ($underlyingCType)JS_VALUE_GET_FLOAT64(jsVal);")
       appendLine("        } else if (tag_v == JS_TAG_INT) {")
       appendLine("            java_v = ($underlyingCType)JS_VALUE_GET_INT(jsVal);")
-      if (underlyingField.ktType == "kotlin.Long") {
+      if (underlyingField.effectiveKtType == "kotlin.Long") {
         appendLine("        } else if (tag_v == JS_TAG_OBJECT) {")
         appendLine("            /* Kotlin/JS Long: {low_1, high_1} packed representation */")
         appendLine("            JSValue lv = JS_GetPropertyStr(ctx, jsVal, \"low_1\");")

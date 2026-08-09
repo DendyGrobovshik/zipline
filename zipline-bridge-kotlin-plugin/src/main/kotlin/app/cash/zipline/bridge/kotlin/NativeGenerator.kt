@@ -2,10 +2,6 @@ package app.cash.zipline.bridge.kotlin
 
 import org.jetbrains.kotlin.descriptors.ClassKind
 import org.jetbrains.kotlin.ir.declarations.IrClass
-import org.jetbrains.kotlin.ir.declarations.IrConstructor
-import org.jetbrains.kotlin.ir.types.IrSimpleType
-import org.jetbrains.kotlin.ir.types.getClass
-import org.jetbrains.kotlin.ir.util.classId
 import org.jetbrains.kotlin.ir.util.fqNameWhenAvailable
 import org.jetbrains.kotlin.ir.util.hasAnnotation
 import org.jetbrains.kotlin.name.FqName
@@ -34,22 +30,6 @@ internal fun generateNativeBridgeFile(outputDir: String, clazz: IrClass) {
   }
   if (hasUnsupported) return
 
-  // Collect wrapper names and full types for Dp-like erased value classes and generic params
-  val wrapperByField = mutableMapOf<String, String>()
-  for (constructor in clazz.declarations.filterIsInstance<IrConstructor>().filter { it.isPrimary }) {
-    val params = constructor.parameters
-      .filter { it.kind == org.jetbrains.kotlin.ir.declarations.IrParameterKind.Regular }
-    for (param in params) {
-      val paramType = param.type
-      val paramClass = (paramType as? IrSimpleType)?.getClass()
-      val paramClassFqn = paramClass?.classId?.asSingleFqName()?.asString()
-      if (paramClassFqn != null && paramClassFqn != "kotlin.Double") {
-        val fieldName = param.name.asString()
-        wrapperByField[fieldName] = paramClassFqn
-      }
-    }
-  }
-
   val source = buildString {
     appendLine("// GENERATED FILE. DO NOT MODIFY MANUALLY.")
     appendLine()
@@ -68,7 +48,10 @@ internal fun generateNativeBridgeFile(outputDir: String, clazz: IrClass) {
     if (needsBridgeForAny) {
       appendLine("import app.cash.zipline.bridgeForAny")
     }
-    val needsJsNumber = fields.any { it.ktType in setOf("kotlin.Double", "kotlin.Float") || (it.isInline && it.underlyingKtType == "kotlin.Float") }
+    val needsJsNumber = fields.any {
+      it.ktType in setOf("kotlin.Double", "kotlin.Float") ||
+        (it.isInline && it.underlyingKtType in setOf("kotlin.Double", "kotlin.Float"))
+    }
     if (needsJsNumber) {
       appendLine("import app.cash.zipline.JsNumberToDouble")
     }
@@ -82,14 +65,16 @@ internal fun generateNativeBridgeFile(outputDir: String, clazz: IrClass) {
     val importFqn = parentFqn ?: fqn
     val imports = mutableSetOf(importForType(importFqn))
     for (field in fields) {
-      if (field.wrapperKtType != null) {
-        imports.add(importForType(field.wrapperKtType))
+      val wrapperKtType = field.wrapperKtType
+      if (wrapperKtType != null) {
+        imports.add(importForType(wrapperKtType))
       }
       if (field.isObjectType && field.ktType != "kotlin.Any" && field.ktType != "kotlin.collections.List") {
         imports.add(importForType(field.ktType))
       }
-      if (field.arrayElementType != null) {
-        imports.add(importForType(field.arrayElementType))
+      val arrayElementType = field.arrayElementType
+      if (arrayElementType != null) {
+        imports.add(importForType(arrayElementType))
       }
     }
     imports.filter { it.isNotEmpty() }.sorted().forEach { appendLine(it) }
@@ -125,6 +110,17 @@ internal fun generateNativeBridgeFile(outputDir: String, clazz: IrClass) {
           }
           appendLine("    JS_FreeValue(ctx, ${field.name}Raw)")
         }
+        field.isInline && field.underlyingKtType == "kotlin.Double" -> {
+          val wrapperName = field.wrapperKtType?.substringAfterLast(".") ?: error("inline without wrapperKtType: ${field.name}")
+          appendLine("    val ${field.name}Raw = JS_GetPropertyStr(ctx, jsVal, \"$propName\")")
+          if (field.isNullable) {
+            appendLine("    val ${field.name} = if (JS_IsUndefined(${field.name}Raw) != 0 || JS_IsNull(${field.name}Raw) != 0) null else $wrapperName(JsNumberToDouble(${field.name}Raw))")
+          } else {
+            appendLine("    val ${field.name}Val = JsNumberToDouble(${field.name}Raw)")
+            appendLine("    val ${field.name} = $wrapperName(${field.name}Val)")
+          }
+          appendLine("    JS_FreeValue(ctx, ${field.name}Raw)")
+        }
         field.isInline && field.underlyingKtType == "kotlin.Long" -> {
           val wrapperName = field.wrapperKtType?.substringAfterLast(".") ?: error("inline without wrapperKtType: ${field.name}")
           appendLine("    val ${field.name}Raw = JS_GetPropertyStr(ctx, jsVal, \"$propName\")")
@@ -136,8 +132,8 @@ internal fun generateNativeBridgeFile(outputDir: String, clazz: IrClass) {
           }
           appendLine("    JS_FreeValue(ctx, ${field.name}Raw)")
         }
-        !field.isInline && field.wrapperKtType != null -> {
-          val wrapperName = field.wrapperKtType.substringAfterLast(".")
+        !field.isInline && field.wrapperKtType.let { it != null } -> {
+          val wrapperName = field.wrapperKtType!!.substringAfterLast(".")
           // Value class not detected as inline — treat as effectiveKtType + wrap
           appendLine("    val ${field.name}Raw = JS_GetPropertyStr(ctx, jsVal, \"$propName\")")
           when (field.ktType) {
@@ -300,15 +296,7 @@ internal fun generateNativeBridgeFile(outputDir: String, clazz: IrClass) {
     } else if (ctorFields.isNotEmpty()) {
       appendLine("    @Suppress(\"UNCHECKED_CAST\")")
       append("    val _obj = $qualifier$className(")
-      append(ctorFields.joinToString(", ") {
-        val wrapName = wrapperByField[it.name]
-        if (wrapName != null && it.ktType == "kotlin.Double") {
-          val shortName = wrapName.substringAfterLast(".")
-          "${it.name} = $shortName(${it.name})"
-        } else {
-          "${it.name} = ${it.name}"
-        }
-      })
+      append(ctorFields.joinToString(", ") { "${it.name} = ${it.name}" })
       appendLine(")")
     } else if (clazz.kind == ClassKind.OBJECT || clazz.isCompanion) {
       // Object/singleton — reference directly, not via constructor
