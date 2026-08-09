@@ -9,6 +9,9 @@ package app.cash.zipline.bridge.test
 fun provideBridgedData(): BridgedData = BridgedTestValues.data
 
 @JsExport
+fun provideBridgedInline(): BridgedInline = BridgedTestValues.inline
+
+@JsExport
 fun provideBridgedInlineHolder(): BridgedInlineHolder = BridgedTestValues.inlineHolder
 
 @JsExport
@@ -22,3 +25,47 @@ fun provideBridgedNullableNull(): BridgedNullable = BridgedTestValues.nullableNu
 
 @JsExport
 fun provideBridgedNullableValue(): BridgedNullable = BridgedTestValues.nullableValue
+
+// New exports for collections
+@JsExport
+fun provideBridgedArray(): BridgedArray = BridgedTestValues.array
+@JsExport
+fun provideBridgedNestedStructure(): BridgedNestedStructure = BridgedTestValues.nestedStructure
+
+@JsExport
+fun provideBridgedEmptyCollections(): BridgedEmptyCollections = BridgedTestValues.emptyCollections
+
+// New exports for inheritance
+@JsExport
+fun provideBridgedBaseClass(): BridgedBaseClass = BridgedTestValues.baseClass
+
+@JsExport
+fun provideBridgedInheritanceChild(): BridgedInheritanceChild = BridgedTestValues.inheritanceChild
+
+@JsExport
+fun provideBridgedDeepInheritance(): BridgedDeepInheritance = BridgedTestValues.deepInheritance
+
+@JsExport
+fun provideBridgedOverrideBase(): BridgedOverrideBase = BridgedTestValues.overrideBase
+
+@JsExport
+fun provideBridgedOverrideChild(): BridgedOverrideChild = BridgedTestValues.overrideChild
+
+@JsExport
+fun provideBridgedInterfaceImplementation(): BridgedInterfaceImplementation = BridgedTestValues.interfaceImpl
+
+// New exports for generics
+@JsExport
+fun provideBridgedGenericClassInt(): BridgedGenericClass<Int> = BridgedTestValues.genericInt
+
+@JsExport
+fun provideBridgedGenericClassString(): BridgedGenericClass<String> = BridgedTestValues.genericString
+
+@JsExport
+fun provideBridgedMultiGenericClass(): BridgedMultiGenericClass<String, Int> = BridgedTestValues.multiGeneric
+
+@JsExport
+fun provideBridgedBoundedGenericClass(): BridgedBoundedGenericClass<BridgedBoundedGenericBase> = BridgedTestValues.boundedGeneric
+
+@JsExport
+fun provideBridgedNestedGeneric(): BridgedNestedGeneric = BridgedTestValues.nestedGeneric

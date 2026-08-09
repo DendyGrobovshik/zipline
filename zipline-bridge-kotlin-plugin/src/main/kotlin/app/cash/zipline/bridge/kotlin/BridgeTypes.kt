@@ -1,27 +1,74 @@
 package app.cash.zipline.bridge.kotlin
 
-// All data types and type mapping tables extracted from ZiplineBridgeIrGenerationExtension.
-// These are pure data — no behavior, no IR dependencies.
+import org.jetbrains.kotlin.ir.declarations.IrClass
+import org.jetbrains.kotlin.ir.types.IrType
+import org.jetbrains.kotlin.ir.types.IrSimpleType
+import org.jetbrains.kotlin.ir.types.classFqName
+import org.jetbrains.kotlin.ir.types.getClass
+import org.jetbrains.kotlin.ir.types.isMarkedNullable
 
-// -- field extraction data class --
-
+/** All data types and type mapping tables extracted from ZiplineBridgeIrGenerationExtension.
+ * These are now linked to the IR where possible for type safety.
+ */
 data class FieldInfo(
   val name: String,
-  val ktType: String,
-  val jniTypeChar: String,
-  val jniFieldType: String,
-  val isPrimitive: Boolean,
-  val isObjectType: Boolean,
+  val type: IrType,
   val isConstructorParam: Boolean,
-  val isArray: Boolean = false,
-  val arrayElementType: String? = null,
-  val arrayElementNullable: Boolean = false,
-  val isNullable: Boolean = false,
-  val isInline: Boolean = false,
-  val underlyingKtType: String? = null,
-  val wrapperKtType: String? = null,
-  val jsPropertyName: String = name,
-)
+  val jsPropertyName: String,
+) {
+  val ktType: String get() = type.classFqName?.asString() ?: ""
+  val isNullable: Boolean get() = (type as? IrSimpleType)?.isMarkedNullable() ?: false
+
+  val irClass: IrClass? get() = (type as? IrSimpleType)?.getClass()
+
+  val isInline: Boolean get() = irClass?.let { isInlineClass(it) } ?: false
+
+  val underlyingKtType: String? get() = if (isInline) {
+    irClass?.declarations
+      ?.filterIsInstance<org.jetbrains.kotlin.ir.declarations.IrConstructor>()
+      ?.firstOrNull { it.isPrimary }
+      ?.parameters
+      ?.firstOrNull { it.kind == org.jetbrains.kotlin.ir.declarations.IrParameterKind.Regular }
+      ?.type?.classFqName?.asString()
+  } else null
+
+  val wrapperKtType: String? get() = if (isInline) ktType else null
+
+  val effectiveKtType: String get() {
+    val underlying = underlyingKtType
+    return if (isInline && !isNullable && underlying != null && isKnownType(underlying)) underlying else ktType
+  }
+
+  val jniFieldType: String get() {
+    val typeStr = effectiveKtType
+    return if (isKnownType(typeStr)) kotlinToJniFieldType[typeStr]!!
+    else irClass?.let { jniTypeDescriptorForClass(it) }
+    ?: jniFieldDescriptor(typeStr)
+  }
+
+  val jniTypeChar: String get() = jniFieldType.firstOrNull()?.toString() ?: ""
+
+  val isPrimitive: Boolean get() = isKnownType(effectiveKtType) && isJniPrimitive(effectiveKtType) && !isNullable
+
+  val isObjectType: Boolean get() = !isKnownType(effectiveKtType) && !isArray
+
+  val isArray: Boolean get() = effectiveKtType in arrayKotlinTypes
+
+  val arrayElementType: String? get() = if (isArray) {
+    (type as? IrSimpleType)?.arguments
+      ?.firstOrNull()
+      ?.let { (it as? org.jetbrains.kotlin.ir.types.IrTypeProjection)?.type ?: (it as? IrType) }
+      ?.let { it.classFqName?.asString() }
+  } else null
+
+  val arrayElementNullable: Boolean get() = if (isArray) {
+    (type as? IrSimpleType)?.arguments
+      ?.firstOrNull()
+      ?.let { (it as? org.jetbrains.kotlin.ir.types.IrTypeProjection)?.type ?: (it as? IrType) }
+      ?.let { (it as? IrSimpleType)?.isMarkedNullable() ?: false }
+      ?: false
+  } else false
+}
 
 // -- JNI info data classes --
 

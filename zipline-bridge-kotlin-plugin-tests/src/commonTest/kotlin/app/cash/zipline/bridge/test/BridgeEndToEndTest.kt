@@ -88,4 +88,79 @@ class BridgeEndToEndTest {
   fun bridgedNullableValue() {
     assertEquals(BridgedTestValues.nullableValue, evalOne("provideBridgedNullableValue"))
   }
+
+  // New tests for collections
+  @Test
+  fun bridgedArray() {
+    assertEquals(BridgedTestValues.array, evalOne("provideBridgedArray"))
+  }
+
+
+  @Test
+  fun bridgedNestedStructure() {
+    assertEquals(BridgedTestValues.nestedStructure, evalOne("provideBridgedNestedStructure"))
+  }
+
+  @Test
+  fun bridgedEmptyCollections() {
+    assertEquals(BridgedTestValues.emptyCollections, evalOne("provideBridgedEmptyCollections"))
+  }
+
+  // New tests for inheritance
+  @Test
+  fun bridgedBaseClass() {
+    assertEquals(BridgedTestValues.baseClass, evalOne("provideBridgedBaseClass"))
+  }
+
+  @Test
+  fun bridgedInheritanceChild() {
+    assertEquals(BridgedTestValues.inheritanceChild, evalOne("provideBridgedInheritanceChild"))
+  }
+
+  @Test
+  fun bridgedDeepInheritance() {
+    assertEquals(BridgedTestValues.deepInheritance, evalOne("provideBridgedDeepInheritance"))
+  }
+
+  @Test
+  fun bridgedOverrideBase() {
+    assertEquals(BridgedTestValues.overrideBase, evalOne("provideBridgedOverrideBase"))
+  }
+
+  @Test
+  fun bridgedOverrideChild() {
+    assertEquals(BridgedTestValues.overrideChild, evalOne("provideBridgedOverrideChild"))
+  }
+
+  @Test
+  fun bridgedInterfaceImplementation() {
+    assertEquals(BridgedTestValues.interfaceImpl, evalOne("provideBridgedInterfaceImplementation"))
+  }
+
+  // New tests for generics
+  @Test
+  fun bridgedGenericClassInt() {
+    assertEquals(BridgedTestValues.genericInt, evalOne("provideBridgedGenericClassInt"))
+  }
+
+  @Test
+  fun bridgedGenericClassString() {
+    assertEquals(BridgedTestValues.genericString, evalOne("provideBridgedGenericClassString"))
+  }
+
+  @Test
+  fun bridgedMultiGenericClass() {
+    assertEquals(BridgedTestValues.multiGeneric, evalOne("provideBridgedMultiGenericClass"))
+  }
+
+  @Test
+  fun bridgedBoundedGenericClass() {
+    assertEquals(BridgedTestValues.boundedGeneric, evalOne("provideBridgedBoundedGenericClass"))
+  }
+
+  @Test
+  fun bridgedNestedGeneric() {
+    assertEquals(BridgedTestValues.nestedGeneric, evalOne("provideBridgedNestedGeneric"))
+  }
+
 }
