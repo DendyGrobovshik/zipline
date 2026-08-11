@@ -70,6 +70,16 @@ class BridgeEndToEndTest {
   }
 
   @Test
+  fun bridgedEnum() {
+    assertEquals(BridgedTestValues.enumSecond, evalOne("provideBridgedEnum"))
+  }
+
+  @Test
+  fun bridgedEnumHolder() {
+    assertEquals(BridgedTestValues.enumHolder, evalOne("provideBridgedEnumHolder"))
+  }
+
+  @Test
   fun bridgedListHolder() {
     assertEquals(BridgedTestValues.listHolder, evalOne("provideBridgedListHolder"))
   }

@@ -38,6 +38,12 @@ value class BridgedDouble(val raw: Double)
 @JvmInline
 value class BridgedNestedInline(val inner: BridgedDouble)
 
+@WithJS2HostBridge
+enum class BridgedEnum { FIRST, SECOND, THIRD }
+
+@WithJS2HostBridge
+data class BridgedEnumHolder(val value: BridgedEnum)
+
 /**
  * Inline classes can only be bridged as fields (or list elements): Kotlin/JS inlines a
  * standalone value-class return value to the underlying primitive, which carries no
@@ -275,6 +281,8 @@ object BridgedTestValues {
   val nestedInline = BridgedNestedInline(inner = double)
   val nestedInlineHolder = BridgedNestedInlineHolder(nested = nestedInline)
   val nestedInlineHolderNull = BridgedNestedInlineHolder(nested = null)
+  val enumSecond = BridgedEnum.SECOND
+  val enumHolder = BridgedEnumHolder(value = enumSecond)
   val listHolder = BridgedListHolder(items = listOf(1, 2, 3))
   val nested = BridgedNested(outer = data)
   val nullableNull = BridgedNullable(text = null, count = null)

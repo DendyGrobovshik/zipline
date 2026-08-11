@@ -58,6 +58,7 @@ internal fun generateBridgeFile(outputDir: String, annotatedClass: IrClass) {
   val hasCollectionField = fields.any { it.ktType in kotlinToJvmClass }
   val isObject = annotatedClass.kind == ClassKind.OBJECT
   val isCompanion = isObject && annotatedClass.isCompanion
+  val isEnum = annotatedClass.kind == ClassKind.ENUM_CLASS
   val constructorSig = if (isObject || constructorFields.isEmpty()) "()V"
     else "(" + constructorFields.joinToString("") { it.jniTypeChar } + ")V"
   val instanceSig = if (isObject) "L${jniClassName.replace(".", "/")};" else ""
@@ -87,7 +88,11 @@ internal fun generateBridgeFile(outputDir: String, annotatedClass: IrClass) {
 
     // -- cached JNI references (initialized once by _init, used by _toJavaObject) --
     appendLine("static jclass _cls = NULL;")
-    if (!isObject) appendLine("static jmethodID _ctor = NULL;")
+    if (isEnum) {
+      appendLine("static jmethodID _valuesMethod = NULL;")
+    } else if (!isObject) {
+      appendLine("static jmethodID _ctor = NULL;")
+    }
     if (isCompanion) {
       appendLine("static jclass _outerCls = NULL;")
       appendLine("static jfieldID _companionField = NULL;")
@@ -98,8 +103,10 @@ internal fun generateBridgeFile(outputDir: String, annotatedClass: IrClass) {
       appendLine("static jclass _boxed_${f.name} = NULL;")
       appendLine("static jmethodID _boxedCtor_${f.name} = NULL;")
     }
-    for (f in bodyFields) {
-      appendLine("static jfieldID _fld_${f.name} = NULL;")
+    if (!isEnum) {
+      for (f in bodyFields) {
+        appendLine("static jfieldID _fld_${f.name} = NULL;")
+      }
     }
     if (hasAnyField || hasCollectionField) {
       appendLine("// Boxed type refs for Any? value dispatch")
@@ -126,7 +133,13 @@ internal fun generateBridgeFile(outputDir: String, annotatedClass: IrClass) {
     appendLine("        return;")
     appendLine("    }")
     appendLine("    _cls = (*env)->NewGlobalRef(env, local);")
-    if (!isObject) {
+    if (isEnum) {
+      appendLine("    _valuesMethod = (*env)->GetStaticMethodID(env, _cls, \"values\", \"()[L$jniClassName;\");")
+      appendLine("    if ((*env)->ExceptionCheck(env)) {")
+      appendLine("        // Let the pending NoSuchMethodError propagate instead of clearing it.")
+      appendLine("        _valuesMethod = NULL;")
+      appendLine("    }")
+    } else if (!isObject) {
       appendLine("    _ctor = (*env)->GetMethodID(env, _cls, \"<init>\", \"$constructorSig\");")
       appendLine("    if ((*env)->ExceptionCheck(env)) {")
       appendLine("        // Let the pending NoSuchMethodError propagate instead of clearing it.")
@@ -175,12 +188,14 @@ internal fun generateBridgeFile(outputDir: String, annotatedClass: IrClass) {
       appendLine("        _any_boxed_Float_ctor = (*env)->GetMethodID(env, _any_boxed_Float_cls, \"<init>\", \"(F)V\");")
       appendLine("    }")
     }
-    for (f in bodyFields) {
-      appendLine("    _fld_${f.name} = (*env)->GetFieldID(env, _cls, \"${f.name}\", \"${f.jniFieldType}\");")
+    if (!isEnum) {
+      for (f in bodyFields) {
+        appendLine("    _fld_${f.name} = (*env)->GetFieldID(env, _cls, \"${f.name}\", \"${f.jniFieldType}\");")
       appendLine("    if ((*env)->ExceptionCheck(env)) {")
       appendLine("        // Let the pending NoSuchFieldError propagate instead of clearing it.")
       appendLine("        _fld_${f.name} = NULL;")
       appendLine("    }")
+      }
     }
     appendLine("}")
     appendLine()
@@ -203,7 +218,14 @@ internal fun generateBridgeFile(outputDir: String, annotatedClass: IrClass) {
     }
 
     appendLine("static jobject ${functionPrefix}_toJavaObject(JNIEnv *env, JSContext *ctx, JSValue jsObj) {")
-    if (!isObject) {
+    if (isEnum) {
+      appendLine("    if (_cls == NULL || _valuesMethod == NULL) {")
+      appendLine("#ifdef __ANDROID__")
+      appendLine("        __android_log_print(ANDROID_LOG_WARN, \"BRIDGE\", \"_toJavaObject: cached refs NULL for $jniClassName\");")
+      appendLine("#endif")
+      appendLine("        return NULL;")
+      appendLine("    }")
+    } else if (!isObject) {
       appendLine("    if (_cls == NULL || _ctor == NULL) {")
       appendLine("#ifdef __ANDROID__")
       appendLine("        __android_log_print(ANDROID_LOG_WARN, \"BRIDGE\", \"_toJavaObject: cached refs NULL for $jniClassName\");")
@@ -227,9 +249,20 @@ internal fun generateBridgeFile(outputDir: String, annotatedClass: IrClass) {
     }
     appendLine()
 
-    if (fields.isNotEmpty()) {
-      appendLine("    // Extract field values from JS object")
-    }
+    if (isEnum) {
+      // Enum — read the JS ordinal and return values()[ordinal].
+      appendLine("    JSValue ordinalRaw = JS_GetPropertyStr(ctx, jsObj, \"ordinal_1\");")
+      appendLine("    jint ordinal = (jint)JS_VALUE_GET_INT(ordinalRaw);")
+      appendLine("    JS_FreeValue(ctx, ordinalRaw);")
+      appendLine("    jobjectArray values = (*env)->CallStaticObjectMethod(env, _cls, _valuesMethod);")
+      appendLine("    if ((*env)->ExceptionCheck(env)) return NULL;")
+      appendLine("    jobject result = (*env)->GetObjectArrayElement(env, values, ordinal);")
+      appendLine("    if ((*env)->ExceptionCheck(env)) return NULL;")
+      appendLine("    return result;")
+    } else {
+      if (fields.isNotEmpty()) {
+        appendLine("    // Extract field values from JS object")
+      }
 
     // Extract each field from the JS object
     for (field in fields) {
@@ -429,6 +462,7 @@ internal fun generateBridgeFile(outputDir: String, annotatedClass: IrClass) {
     }
 
     appendLine("    return result;")
+    }
     appendLine("}")
 
     if (isInlineClass(annotatedClass) && !isObject && constructorFields.size == 1) {
@@ -825,6 +859,9 @@ private fun emitCValueConverter(
 /** Generate all per-class C bridge files (each self-registers via constructor). */
 internal fun generateCBridges(outputDir: String, annotatedClasses: List<IrClass>) {
   for (clazz in annotatedClasses) {
+    // Interfaces can't be instantiated or dispatched (the native generator excludes them too);
+    // generating a bridge for one would fail _init with NoSuchMethodError on the constructor.
+    if (clazz.kind == ClassKind.INTERFACE) continue
     generateBridgeFile(outputDir, clazz)
   }
 }

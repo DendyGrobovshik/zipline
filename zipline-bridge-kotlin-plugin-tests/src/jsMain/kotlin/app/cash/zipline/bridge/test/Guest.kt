@@ -27,6 +27,12 @@ fun provideBridgedNestedInlineHolder(): BridgedNestedInlineHolder = BridgedTestV
 fun provideBridgedNestedInlineHolderNull(): BridgedNestedInlineHolder = BridgedTestValues.nestedInlineHolderNull
 
 @JsExport
+fun provideBridgedEnum(): BridgedEnum = BridgedTestValues.enumSecond
+
+@JsExport
+fun provideBridgedEnumHolder(): BridgedEnumHolder = BridgedTestValues.enumHolder
+
+@JsExport
 fun provideBridgedListHolder(): BridgedListHolder = BridgedTestValues.listHolder
 
 @JsExport
