@@ -1,5 +1,9 @@
 package app.cash.zipline.bridge.kotlin
 
+import org.jetbrains.kotlin.ir.types.IrType
+import org.jetbrains.kotlin.ir.types.IrSimpleType
+import org.jetbrains.kotlin.ir.types.IrTypeProjection
+
 import org.jetbrains.kotlin.ir.declarations.IrClass
 import org.jetbrains.kotlin.ir.util.fqNameWhenAvailable
 import org.jetbrains.kotlin.ir.declarations.IrDeclarationParent
@@ -182,6 +186,22 @@ internal fun generateBridgeFile(outputDir: String, annotatedClass: IrClass) {
     appendLine()
 
     // -- toJavaObject function --
+    // Recursive collection/array/map converters are emitted before the converter that calls them.
+    val helpers = StringBuilder()
+    for (field in fields) {
+      val kt = field.effectiveKtType
+      if (kt == "kotlin.collections.List" || kt in MAP_C_TYPES || kt == "kotlin.Array" || kt in PRIMITIVE_ARRAY_ELEMENT_TYPE) {
+        emitCValueConverter(helpers, "conv_${field.name}", kt, field.type)
+      }
+    }
+    if (helpers.isNotEmpty()) {
+      val withFindMethod = StringBuilder()
+      emitCBridgeFindMethod(withFindMethod)
+      withFindMethod.append(helpers)
+      append(withFindMethod)
+      appendLine()
+    }
+
     appendLine("static jobject ${functionPrefix}_toJavaObject(JNIEnv *env, JSContext *ctx, JSValue jsObj) {")
     if (!isObject) {
       appendLine("    if (_cls == NULL || _ctor == NULL) {")
@@ -312,14 +332,24 @@ internal fun generateBridgeFile(outputDir: String, annotatedClass: IrClass) {
           appendLine("        $javaVar = (*env)->NewStringUTF(env, str_${field.name});")
           appendLine("        JS_FreeCString(ctx, str_${field.name});")
         }
-        field.effectiveKtType in kotlinToJvmClass -> {
-          emitCollectionExtraction(this, field)
+        field.effectiveKtType == "kotlin.collections.List" -> {
+          val fn = emitCValueConverter(helpers, "conv_${field.name}", field.effectiveKtType, field.type)
+          appendLine("        $javaVar = $fn(env, ctx, js_${field.name});")
+        }
+        field.effectiveKtType in MAP_C_TYPES -> {
+          val fn = emitCValueConverter(helpers, "conv_${field.name}", field.effectiveKtType, field.type)
+          appendLine("        $javaVar = $fn(env, ctx, js_${field.name});")
         }
         field.effectiveKtType == "kotlin.Any" -> {
           emitAnyFieldExtraction(this, field)
         }
+        field.effectiveKtType == "kotlin.Array" -> {
+          val fn = emitCValueConverter(helpers, "conv_${field.name}", field.effectiveKtType, field.type)
+          appendLine("        $javaVar = $fn(env, ctx, js_${field.name});")
+        }
         field.isArray -> {
-          emitArrayExtraction(this, field)
+          val fn = emitCValueConverter(helpers, "conv_${field.name}", field.effectiveKtType, field.type)
+          appendLine("        $javaVar = $fn(env, ctx, js_${field.name});")
         }
         field.isInline && field.isNullable -> {
           val inlineCPrefix = cFunctionPrefix(FqName(field.ktType))
@@ -482,14 +512,17 @@ internal fun emitArrayExtraction(sb: StringBuilder, field: FieldInfo) {
   }
 }
 
-/** Emit the common array preamble: JS_IsArray check + get length. */
+/** Emit the common array preamble: length check (JS_IsArray rejects typed arrays like Int32Array). */
 internal fun emitArrayPreamble(sb: StringBuilder, jsVar: String) {
-  sb.appendLine("        if (!JS_IsArray(ctx, $jsVar)) {")
+  sb.appendLine("        JSValue _arr_len_check = JS_GetPropertyStr(ctx, $jsVar, \"length\");")
+  sb.appendLine("        if (JS_IsUndefined(_arr_len_check)) {")
   sb.appendLine("            jclass iae = (*env)->FindClass(env, \"java/lang/IllegalArgumentException\");")
   sb.appendLine("            if (iae != NULL) (*env)->ThrowNew(env, iae, \"Expected an array\");")
+  sb.appendLine("            JS_FreeValue(ctx, _arr_len_check);")
   sb.appendLine("            JS_FreeValue(ctx, $jsVar);")
   sb.appendLine("            return NULL;")
   sb.appendLine("        }")
+  sb.appendLine("        JS_FreeValue(ctx, _arr_len_check);")
   sb.appendLine("        JSValue js_len_${jsVar} = JS_GetPropertyStr(ctx, $jsVar, \"length\");")
   sb.appendLine("        jint len_${jsVar} = (jint)JS_VALUE_GET_INT(js_len_${jsVar});")
   sb.appendLine("        JS_FreeValue(ctx, js_len_${jsVar});")
@@ -667,6 +700,303 @@ internal fun emitAnyFieldExtraction(
 
 // -- Collection field extraction (List, Set, Map from Kotlin stdlib) --
 
+/** Map types recognized by the recursive C converters. */
+private val MAP_C_TYPES = setOf(
+  "kotlin.collections.Map", "kotlin.collections.MutableMap",
+  "kotlin.collections.HashMap", "kotlin.collections.LinkedHashMap",
+)
+
+/** Emits the shared prototype-method discovery helper (once per file with collection fields). */
+private fun emitCBridgeFindMethod(helpers: StringBuilder) {
+  helpers.appendLine(
+    """
+    static JSValue bridgeFindMethod(JSContext* ctx, JSValue obj, const char* prefix) {
+      JSValue ctor = JS_GetPropertyStr(ctx, obj, "constructor");
+      JSValue proto = JS_GetPropertyStr(ctx, ctor, "prototype");
+      JS_FreeValue(ctx, ctor);
+      while (JS_IsObject(proto)) {
+        JSPropertyEnum* ptab; uint32_t plen;
+        if (JS_GetOwnPropertyNames(ctx, &ptab, &plen, proto, JS_GPN_STRING_MASK) == 0) {
+          for (uint32_t i = 0; i < plen; i++) {
+            const char* nm = JS_AtomToCString(ctx, ptab[i].atom);
+            if (nm != NULL && strncmp(nm, prefix, strlen(prefix)) == 0) {
+              JSValue fn = JS_GetPropertyStr(ctx, obj, nm);
+              JS_FreeCString(ctx, nm);
+              JS_FreePropertyEnum(ctx, ptab, plen);
+              JS_FreeValue(ctx, proto);
+              return fn;
+            }
+            JS_FreeCString(ctx, nm);
+          }
+          JS_FreePropertyEnum(ctx, ptab, plen);
+        }
+        JSValue parent = JS_GetPropertyStr(ctx, proto, "__proto__");
+        JS_FreeValue(ctx, proto);
+        proto = parent;
+      }
+      JS_FreeValue(ctx, proto);
+      return JS_DupValue(ctx, JS_UNDEFINED);
+    }
+    """.trimIndent(),
+  )
+  helpers.appendLine()
+}
+
+private fun emitCBoxedConverter(
+  helpers: StringBuilder,
+  name: String,
+  boxedClass: String,
+  ctorSig: String,
+  valueExpr: String,
+) {
+  helpers.appendLine(
+    """
+    static jobject $name(JNIEnv* env, JSContext* ctx, JSValue jsVal) {
+      jclass c = (*env)->FindClass(env, "$boxedClass");
+      jmethodID m = (*env)->GetMethodID(env, c, "<init>", "$ctorSig");
+      return (*env)->NewObject(env, c, m, $valueExpr);
+    }
+    """.trimIndent(),
+  )
+  helpers.appendLine()
+}
+
+/**
+ * Emits a C static function converting a JS value of [ktType] into a jobject (borrowed input;
+ * the caller owns and frees the JSValue). Recurses for nested collections. Returns the function name.
+ */
+private fun emitCValueConverter(
+  helpers: StringBuilder,
+  name: String,
+  ktType: String,
+  irType: IrType?,
+): String {
+  when (ktType) {
+    "kotlin.String" -> {
+      helpers.appendLine(
+        """
+        static jobject $name(JNIEnv* env, JSContext* ctx, JSValue jsVal) {
+          const char* s = JS_ToCString(ctx, jsVal);
+          jobject r = (*env)->NewStringUTF(env, s);
+          JS_FreeCString(ctx, s);
+          return r;
+        }
+        """.trimIndent(),
+      )
+      helpers.appendLine()
+    }
+    "kotlin.Int" -> emitCBoxedConverter(helpers, name, "java/lang/Integer", "(I)V", "JS_VALUE_GET_INT(jsVal)")
+    "kotlin.Float" -> emitCBoxedConverter(helpers, name, "java/lang/Float", "(F)V", "JS_VALUE_GET_FLOAT64(jsVal)")
+    "kotlin.Double" -> emitCBoxedConverter(helpers, name, "java/lang/Double", "(D)V", "JS_VALUE_GET_FLOAT64(jsVal)")
+    "kotlin.Boolean" -> emitCBoxedConverter(helpers, name, "java/lang/Boolean", "(Z)V", "JS_VALUE_GET_BOOL(jsVal)")
+    "kotlin.Long" -> emitCBoxedConverter(helpers, name, "java/lang/Long", "(J)V", "JS_VALUE_GET_INT(jsVal)")
+    "kotlin.Byte" -> emitCBoxedConverter(helpers, name, "java/lang/Byte", "(B)V", "(jbyte)JS_VALUE_GET_INT(jsVal)")
+    "kotlin.Short" -> emitCBoxedConverter(helpers, name, "java/lang/Short", "(S)V", "(jshort)JS_VALUE_GET_INT(jsVal)")
+    "kotlin.Char" -> emitCBoxedConverter(helpers, name, "java/lang/Character", "(C)V", "(jchar)JS_VALUE_GET_INT(jsVal)")
+    "kotlin.Any" -> {
+      helpers.appendLine(
+        """
+        static jobject $name(JNIEnv* env, JSContext* ctx, JSValue jsVal) {
+          int tag = JS_VALUE_GET_NORM_TAG(jsVal);
+          switch (tag) {
+            case JS_TAG_INT: {
+              jclass c = (*env)->FindClass(env, "java/lang/Integer");
+              jmethodID m = (*env)->GetMethodID(env, c, "<init>", "(I)V");
+              return (*env)->NewObject(env, c, m, JS_VALUE_GET_INT(jsVal));
+            }
+            case JS_TAG_FLOAT64: {
+              jclass c = (*env)->FindClass(env, "java/lang/Double");
+              jmethodID m = (*env)->GetMethodID(env, c, "<init>", "(D)V");
+              return (*env)->NewObject(env, c, m, JS_VALUE_GET_FLOAT64(jsVal));
+            }
+            case JS_TAG_BOOL: {
+              jclass c = (*env)->FindClass(env, "java/lang/Boolean");
+              jmethodID m = (*env)->GetMethodID(env, c, "<init>", "(Z)V");
+              return (*env)->NewObject(env, c, m, JS_VALUE_GET_BOOL(jsVal));
+            }
+            case JS_TAG_STRING: {
+              const char* s = JS_ToCString(ctx, jsVal);
+              jobject r = (*env)->NewStringUTF(env, s);
+              JS_FreeCString(ctx, s);
+              return r;
+            }
+            default: {
+              JSValue disp = JS_GetPropertyStr(ctx, jsVal, "bridge_dispatch");
+              if (!JS_IsUndefined(disp)) {
+                BridgeConverterFn fn = bridgeConverterFromJSValue(disp);
+                JS_FreeValue(ctx, disp);
+                return fn(env, ctx, jsVal);
+              }
+              JS_FreeValue(ctx, disp);
+              return NULL;
+            }
+          }
+        }
+        """.trimIndent(),
+      )
+      helpers.appendLine()
+    }
+    "kotlin.collections.List" -> {
+      val elementType = typeArgument(irType, 0)
+      val elementKtType = effectiveClassFqn(elementType)
+      val elementName = "${name}_element"
+      emitCValueConverter(helpers, elementName, elementKtType, elementType)
+      helpers.appendLine(
+        """
+        static jobject $name(JNIEnv* env, JSContext* ctx, JSValue jsVal) {
+          jclass alc = (*env)->FindClass(env, "java/util/ArrayList");
+          jmethodID alc_init = (*env)->GetMethodID(env, alc, "<init>", "()V");
+          jmethodID alc_add = (*env)->GetMethodID(env, alc, "add", "(Ljava/lang/Object;)Z");
+          jobject result = (*env)->NewObject(env, alc, alc_init);
+          JSValue arr = jsVal;
+          JSValue wrap = JS_GetPropertyStr(ctx, jsVal, "array_1");
+          if (!JS_IsUndefined(wrap)) { arr = wrap; }
+          JSValue lenVal = JS_GetPropertyStr(ctx, arr, "length");
+          jint len = JS_VALUE_GET_INT(lenVal);
+          JS_FreeValue(ctx, lenVal);
+          for (jint i = 0; i < len; i++) {
+            JSValue elem = JS_GetPropertyUint32(ctx, arr, i);
+            jobject je = $elementName(env, ctx, elem);
+            (*env)->CallBooleanMethod(env, result, alc_add, je);
+            (*env)->DeleteLocalRef(env, je);
+            JS_FreeValue(ctx, elem);
+          }
+          JS_FreeValue(ctx, wrap);
+          return result;
+        }
+        """.trimIndent(),
+      )
+      helpers.appendLine()
+    }
+    "kotlin.Array" -> {
+      val elementType = typeArgument(irType, 0)
+      val elementKtType = effectiveClassFqn(elementType)
+      val elementName = "${name}_element"
+      emitCValueConverter(helpers, elementName, elementKtType, elementType)
+      helpers.appendLine(
+        """
+        static jobject $name(JNIEnv* env, JSContext* ctx, JSValue jsVal) {
+          jclass oc = (*env)->FindClass(env, "java/lang/Object");
+          JSValue lenVal = JS_GetPropertyStr(ctx, jsVal, "length");
+          jint len = JS_VALUE_GET_INT(lenVal);
+          JS_FreeValue(ctx, lenVal);
+          jobjectArray result = (*env)->NewObjectArray(env, len, oc, NULL);
+          for (jint i = 0; i < len; i++) {
+            JSValue elem = JS_GetPropertyUint32(ctx, jsVal, i);
+            jobject je = $elementName(env, ctx, elem);
+            (*env)->SetObjectArrayElement(env, result, i, je);
+            (*env)->DeleteLocalRef(env, je);
+            JS_FreeValue(ctx, elem);
+          }
+          return result;
+        }
+        """.trimIndent(),
+      )
+      helpers.appendLine()
+    }
+    in MAP_C_TYPES -> {
+      val keyType = typeArgument(irType, 0)
+      val valueType = typeArgument(irType, 1)
+      val keyName = "${name}_key"
+      val valueName = "${name}_value"
+      emitCValueConverter(helpers, keyName, effectiveClassFqn(keyType), keyType)
+      emitCValueConverter(helpers, valueName, effectiveClassFqn(valueType), valueType)
+      helpers.appendLine(
+        """
+        static jobject $name(JNIEnv* env, JSContext* ctx, JSValue jsVal) {
+          jclass hc = (*env)->FindClass(env, "java/util/HashMap");
+          jmethodID hc_init = (*env)->GetMethodID(env, hc, "<init>", "()V");
+          jmethodID hc_put = (*env)->GetMethodID(env, hc, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
+          jobject result = (*env)->NewObject(env, hc, hc_init);
+          JSValue entriesFn = bridgeFindMethod(ctx, jsVal, "get_entries_");
+          if (JS_IsUndefined(entriesFn)) { JS_FreeValue(ctx, entriesFn); return result; }
+          JSValue entries = JS_Call(ctx, entriesFn, jsVal, 0, NULL);
+          JS_FreeValue(ctx, entriesFn);
+          JSValue iterFn = bridgeFindMethod(ctx, entries, "iterator_");
+          if (JS_IsUndefined(iterFn)) { JS_FreeValue(ctx, iterFn); JS_FreeValue(ctx, entries); return result; }
+          JSValue iterator = JS_Call(ctx, iterFn, entries, 0, NULL);
+          JS_FreeValue(ctx, iterFn);
+          JS_FreeValue(ctx, entries);
+          JSValue hasNextFn = bridgeFindMethod(ctx, iterator, "hasNext_");
+          JSValue nextFn = bridgeFindMethod(ctx, iterator, "next_");
+          if (JS_IsUndefined(hasNextFn) || JS_IsUndefined(nextFn)) {
+            JS_FreeValue(ctx, nextFn); JS_FreeValue(ctx, hasNextFn); JS_FreeValue(ctx, iterator);
+            return result;
+          }
+          while (1) {
+            JSValue hn = JS_Call(ctx, hasNextFn, iterator, 0, NULL);
+            int h = JS_VALUE_GET_BOOL(hn);
+            JS_FreeValue(ctx, hn);
+            if (!h) break;
+            JSValue entry = JS_Call(ctx, nextFn, iterator, 0, NULL);
+            JSValue keyFn = bridgeFindMethod(ctx, entry, "get_key_");
+            JSValue valueFn = bridgeFindMethod(ctx, entry, "get_value_");
+            JSValue keyVal = JS_Call(ctx, keyFn, entry, 0, NULL);
+            JSValue valueVal = JS_Call(ctx, valueFn, entry, 0, NULL);
+            JS_FreeValue(ctx, keyFn);
+            JS_FreeValue(ctx, valueFn);
+            jobject jk = $keyName(env, ctx, keyVal);
+            jobject jv = $valueName(env, ctx, valueVal);
+            (*env)->CallObjectMethod(env, result, hc_put, jk, jv);
+            (*env)->DeleteLocalRef(env, jk);
+            (*env)->DeleteLocalRef(env, jv);
+            JS_FreeValue(ctx, valueVal);
+            JS_FreeValue(ctx, keyVal);
+            JS_FreeValue(ctx, entry);
+          }
+          JS_FreeValue(ctx, nextFn);
+          JS_FreeValue(ctx, hasNextFn);
+          JS_FreeValue(ctx, iterator);
+          return result;
+        }
+        """.trimIndent(),
+      )
+      helpers.appendLine()
+    }
+    in PRIMITIVE_ARRAY_ELEMENT_TYPE -> {
+      val arrayType = kotlinToCType[ktType]!!
+      val info = primitiveArrayJniInfo[ktType]!!
+      helpers.appendLine(
+        """
+        static jobject $name(JNIEnv* env, JSContext* ctx, JSValue jsVal) {
+          JSValue lenVal = JS_GetPropertyStr(ctx, jsVal, "length");
+          jint len = JS_VALUE_GET_INT(lenVal);
+          JS_FreeValue(ctx, lenVal);
+          ${arrayType} arr = (*env)->${info.newArrayFn}(env, len);
+          ${info.jniElementType}* elems = (*env)->${info.getElementsFn}(env, arr, NULL);
+          for (jint i = 0; i < len; i++) {
+            JSValue elem = JS_GetPropertyUint32(ctx, jsVal, i);
+            elems[i] = ${info.jsGetterCast}${info.jsGetterTemplate}(elem);
+            JS_FreeValue(ctx, elem);
+          }
+          (*env)->${info.releaseElementsFn}(env, arr, elems, 0);
+          return arr;
+        }
+        """.trimIndent(),
+      )
+      helpers.appendLine()
+    }
+    else -> {
+      // Object: bridge_dispatch lookup
+      helpers.appendLine(
+        """
+        static jobject $name(JNIEnv* env, JSContext* ctx, JSValue jsVal) {
+          JSValue disp = JS_GetPropertyStr(ctx, jsVal, "bridge_dispatch");
+          if (!JS_IsUndefined(disp)) {
+            BridgeConverterFn fn = bridgeConverterFromJSValue(disp);
+            JS_FreeValue(ctx, disp);
+            return fn(env, ctx, jsVal);
+          }
+          JS_FreeValue(ctx, disp);
+          return NULL;
+        }
+        """.trimIndent(),
+      )
+      helpers.appendLine()
+    }
+  }
+  return name
+}
 internal fun emitCollectionExtraction(
   sb: StringBuilder,
   field: FieldInfo,

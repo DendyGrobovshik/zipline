@@ -33,6 +33,11 @@ value class BridgedFloat(val raw: Float)
 @JvmInline
 value class BridgedDouble(val raw: Double)
 
+/** Nested inline: a value class whose underlying type is itself a value class (like SpaceArrangement(spacing: Dp)). */
+@WithJS2HostBridge
+@JvmInline
+value class BridgedNestedInline(val inner: BridgedDouble)
+
 /**
  * Inline classes can only be bridged as fields (or list elements): Kotlin/JS inlines a
  * standalone value-class return value to the underlying primitive, which carries no
@@ -46,6 +51,9 @@ data class BridgedFloatHolder(val floatValue: BridgedFloat)
 
 @WithJS2HostBridge
 data class BridgedDoubleHolder(val doubleValue: BridgedDouble)
+
+@WithJS2HostBridge
+data class BridgedNestedInlineHolder(val nested: BridgedNestedInline?)
 
 @WithJS2HostBridge
 data class BridgedListHolder(val items: List<Int>)
@@ -65,6 +73,10 @@ data class BridgedArray(
   val stringArray: Array<String>,
   val booleanArray: BooleanArray,
   val doubleArray: DoubleArray,
+  val floatArray: FloatArray,
+  val byteArray: ByteArray,
+  val shortArray: ShortArray,
+  val charArray: CharArray,
   val primitiveList: List<Int>,
   val stringList: List<String>,
 )
@@ -96,16 +108,44 @@ data class BridgedEmptyCollections(
 open class BridgedBaseClass {
   open val baseProperty: String = "base"
   val baseField: Int = 10
+
+  override fun equals(other: Any?): Boolean {
+    if (this === other) return true
+    if (other !is BridgedBaseClass) return false
+    return baseProperty == other.baseProperty && baseField == other.baseField
+  }
+
+  override fun hashCode(): Int {
+    var result = baseProperty.hashCode()
+    result = 31 * result + baseField
+    return result
+  }
 }
 
 @WithJS2HostBridge
 open class BridgedInheritanceChild : BridgedBaseClass() {
   val childField: Int = 1
+
+  override fun equals(other: Any?): Boolean {
+    if (this === other) return true
+    if (other !is BridgedInheritanceChild) return false
+    return super.equals(other) && childField == other.childField
+  }
+
+  override fun hashCode(): Int = 31 * super.hashCode() + childField
 }
 
 @WithJS2HostBridge
 class BridgedDeepInheritance : BridgedInheritanceChild() {
   val deepField: Double = 3.14
+
+  override fun equals(other: Any?): Boolean {
+    if (this === other) return true
+    if (other !is BridgedDeepInheritance) return false
+    return super.equals(other) && deepField == other.deepField
+  }
+
+  override fun hashCode(): Int = 31 * super.hashCode() + deepField.hashCode()
 }
 
 /**
@@ -116,13 +156,36 @@ open class BridgedOverrideBase {
   open val overriddenProperty: String = "base"
   open var overriddenVar: Int = 5
   val regularField: Boolean = true
+
+  override fun equals(other: Any?): Boolean {
+    if (this === other) return true
+    if (other !is BridgedOverrideBase) return false
+    return overriddenProperty == other.overriddenProperty &&
+      overriddenVar == other.overriddenVar &&
+      regularField == other.regularField
+  }
+
+  override fun hashCode(): Int {
+    var result = overriddenProperty.hashCode()
+    result = 31 * result + overriddenVar
+    result = 31 * result + regularField.hashCode()
+    return result
+  }
 }
 
-@WithJS2HostBridge  
+@WithJS2HostBridge
 class BridgedOverrideChild : BridgedOverrideBase() {
   override val overriddenProperty: String = "overridden"
   override var overriddenVar: Int = 10
   val childField: String = "child"
+
+  override fun equals(other: Any?): Boolean {
+    if (this === other) return true
+    if (other !is BridgedOverrideChild) return false
+    return super.equals(other) && childField == other.childField
+  }
+
+  override fun hashCode(): Int = 31 * super.hashCode() + childField.hashCode()
 }
 
 /**
@@ -138,6 +201,14 @@ interface BridgedInterface {
 class BridgedInterfaceImplementation : BridgedInterface {
   override val interfaceProperty: String = "implemented"
   override fun interfaceMethod(): Int = 42
+
+  override fun equals(other: Any?): Boolean {
+    if (this === other) return true
+    if (other !is BridgedInterfaceImplementation) return false
+    return interfaceProperty == other.interfaceProperty
+  }
+
+  override fun hashCode(): Int = interfaceProperty.hashCode()
 }
 
 /**
@@ -165,6 +236,14 @@ data class BridgedMultiGenericClass<T, U>(
 @WithJS2HostBridge
 open class BridgedBoundedGenericBase {
   open val baseProperty: String = "base"
+
+  override fun equals(other: Any?): Boolean {
+    if (this === other) return true
+    if (other !is BridgedBoundedGenericBase) return false
+    return baseProperty == other.baseProperty
+  }
+
+  override fun hashCode(): Int = baseProperty.hashCode()
 }
 
 @WithJS2HostBridge
@@ -193,6 +272,9 @@ object BridgedTestValues {
   val floatHolder = BridgedFloatHolder(floatValue = float)
   val double = BridgedDouble(raw = 2.5)
   val doubleHolder = BridgedDoubleHolder(doubleValue = double)
+  val nestedInline = BridgedNestedInline(inner = double)
+  val nestedInlineHolder = BridgedNestedInlineHolder(nested = nestedInline)
+  val nestedInlineHolderNull = BridgedNestedInlineHolder(nested = null)
   val listHolder = BridgedListHolder(items = listOf(1, 2, 3))
   val nested = BridgedNested(outer = data)
   val nullableNull = BridgedNullable(text = null, count = null)
@@ -204,6 +286,10 @@ object BridgedTestValues {
     stringArray = arrayOf("a", "b", "c"),
     booleanArray = booleanArrayOf(true, false),
     doubleArray = doubleArrayOf(1.0, 2.0, 3.0),
+    floatArray = floatArrayOf(1.5f, 2.5f, 3.5f),
+    byteArray = byteArrayOf(1, 2, 3),
+    shortArray = shortArrayOf(10, 20, 30),
+    charArray = charArrayOf('a', 'b', 'c'),
     primitiveList = listOf(1, 2, 3),
     stringList = listOf("a", "b", "c")
   )

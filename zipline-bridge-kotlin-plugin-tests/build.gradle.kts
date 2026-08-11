@@ -83,13 +83,20 @@ kotlin {
     val commonTest by getting {
       dependencies {
         implementation(kotlin("test"))
-        implementation(projects.ziplineLoader)
       }
       kotlin.srcDir(generatedGuestDir)
     }
     val jvmTest by getting {
       dependencies {
         implementation(kotlin("test-junit"))
+        // ZiplineFile parsing for the embedded guest container is host-only; the loader
+        // has no JS target, so this dependency must not sit in commonTest.
+        implementation(projects.ziplineLoader)
+      }
+    }
+    val nativeTest by getting {
+      dependencies {
+        implementation(projects.ziplineLoader)
       }
     }
   }
@@ -147,6 +154,7 @@ tasks {
   // Embed the guest bytecode as base64 constants, shared by jvmTest and nativeTest.
   val generateGuestSource = register("generateGuestSource") {
     dependsOn(compileGuestJs)
+    inputs.dir(layout.buildDirectory.dir("zipline-guest"))
     outputs.dir(generatedGuestDir)
     doLast {
       val ziplineDir = layout.buildDirectory.dir("zipline-guest").get().asFile

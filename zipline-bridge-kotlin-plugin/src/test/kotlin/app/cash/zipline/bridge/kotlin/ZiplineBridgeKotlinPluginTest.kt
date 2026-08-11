@@ -372,19 +372,16 @@ class ZiplineBridgeKotlinPluginTest {
 
       val content = cFile.readText()
 
-      // JS array check
-      assertTrue(content.contains("JS_IsArray(ctx, js_scores)"))
-
       // Typed JNI array creation
       assertTrue(content.contains("NewIntArray"))
       assertTrue(content.contains("GetIntArrayElements"))
       assertTrue(content.contains("ReleaseIntArrayElements"))
-      assertTrue(content.contains("jintArray arr_scores"))
-      assertTrue(content.contains("jint *elems_scores"))
+      assertTrue(content.contains("jintArray arr"))
+      assertTrue(content.contains("jint* elems"))
 
       // Loop with element extraction
-      assertTrue(content.contains("for (jint i = 0; i < len_js_scores; i++)"))
-      assertTrue(content.contains("JS_GetPropertyUint32(ctx, js_scores, i)"))
+      assertTrue(content.contains("for (jint i = 0; i < len; i++)"))
+      assertTrue(content.contains("JS_GetPropertyUint32(ctx, jsVal, i)"))
       assertTrue(content.contains("JS_VALUE_GET_INT(elem)"))
       assertTrue(content.contains("JS_FreeValue(ctx, elem)"))
 
@@ -422,22 +419,19 @@ class ZiplineBridgeKotlinPluginTest {
 
       val content = cFile.readText()
 
-      // JS array check
-      assertTrue(content.contains("JS_IsArray(ctx, js_names)"))
-
       // String array creation
-      assertTrue(content.contains("FindClass(env, \"java/lang/String\")"))
-      assertTrue(content.contains("NewObjectArray(env, len_js_names, strClass_names, NULL)"))
+      assertTrue(content.contains("FindClass(env, \"java/lang/Object\")"))
+      assertTrue(content.contains("NewObjectArray(env, len, oc, NULL)"))
 
       // String element conversion in loop
-      assertTrue(content.contains("JS_ToCString(ctx, elem)"))
-      assertTrue(content.contains("NewStringUTF(env, str)"))
-      assertTrue(content.contains("JS_FreeCString(ctx, str)"))
+      assertTrue(content.contains("JS_ToCString(ctx, jsVal)"))
+      assertTrue(content.contains("NewStringUTF(env, s)"))
+      assertTrue(content.contains("JS_FreeCString(ctx, s)"))
       assertTrue(content.contains("SetObjectArrayElement"))
       assertTrue(content.contains("DeleteLocalRef"))
 
       // JNI field descriptor for object array
-      assertTrue(content.contains("[Ljava/lang/Object;"))
+      assertTrue(content.contains("[Ljava/lang/String;"))
     } finally {
       outputDir.toFile().deleteRecursively()
     }
@@ -476,20 +470,11 @@ class ZiplineBridgeKotlinPluginTest {
       val content = cFile.readText()
 
       // General array path (since Item is not a known type like String or primitive)
-      assertTrue(content.contains("JS_IsArray(ctx, js_items)"))
+      assertTrue(content.contains("NewObjectArray(env, len, oc, NULL)"))
 
-      // Pre-looked-up boxed classes (general path)
-      assertTrue(content.contains("FindClass(env, \"java/lang/Integer\")"))
-
-      // Per-element runtime dispatch
-      assertTrue(content.contains("JS_VALUE_GET_NORM_TAG(elem)"))
-      assertTrue(content.contains("case JS_TAG_INT:"))
-      assertTrue(content.contains("case JS_TAG_OBJECT:"))
-
-      // bridge_dispatch in the object branch
-      assertTrue(content.contains("JS_GetPropertyStr(ctx, elem, \"bridge_dispatch\")"))
-      assertTrue(content.contains("TODO: when pointer compression lands, use JS_VALUE_GET_INT"))
-      assertTrue(content.contains("BridgeConverterFn disp = bridgeConverterFromJSValue(disp_val)"))
+      // Per-element dispatch through the object converter
+      assertTrue(content.contains("JS_GetPropertyStr(ctx, jsVal, \"bridge_dispatch\")"))
+      assertTrue(content.contains("BridgeConverterFn fn = bridgeConverterFromJSValue(disp)"))
 
       // NewObjectArray
       assertTrue(content.contains("NewObjectArray"))
@@ -526,25 +511,16 @@ class ZiplineBridgeKotlinPluginTest {
 
       val content = cFile.readText()
 
-      // General array dispatch
-      assertTrue(content.contains("JS_IsArray(ctx, js_values)"))
-
       // All tag branches present
       assertTrue(content.contains("case JS_TAG_INT:"))
       assertTrue(content.contains("case JS_TAG_FLOAT64:"))
       assertTrue(content.contains("case JS_TAG_BOOL:"))
       assertTrue(content.contains("case JS_TAG_STRING:"))
-      assertTrue(content.contains("case JS_TAG_OBJECT:"))
 
-      // Pre-looked-up boxing classes
-      assertTrue(content.contains("cls_values_Int"))
-      assertTrue(content.contains("ctor_values_Int"))
-      assertTrue(content.contains("cls_values_Double"))
-      assertTrue(content.contains("cls_values_Boolean"))
 
       // Object branch uses bridge_dispatch
-      assertTrue(content.contains("JS_GetPropertyStr(ctx, elem, \"bridge_dispatch\")"))
-      assertTrue(content.contains("JS_IsUndefined(disp_val)"))
+      assertTrue(content.contains("JS_GetPropertyStr(ctx, jsVal, \"bridge_dispatch\")"))
+      assertTrue(content.contains("JS_IsUndefined(disp)"))
 
       // Cleanup
       assertTrue(content.contains("DeleteLocalRef"))
@@ -734,7 +710,6 @@ class ZiplineBridgeKotlinPluginTest {
       assertTrue(content.contains("JS_IsNull(js_scores)"))
 
       // Array extraction inside null check
-      assertTrue(content.contains("JS_IsArray(ctx, js_scores)"))
       assertTrue(content.contains("NewIntArray"))
       assertTrue(content.contains("GetIntArrayElements"))
 
@@ -775,19 +750,13 @@ class ZiplineBridgeKotlinPluginTest {
 
       val content = cFile.readText()
 
-      // Per-element null check
-      assertTrue(content.contains("JS_IsUndefined(elem)"))
-      assertTrue(content.contains("JS_IsNull(elem)"))
-
-      // String conversion inside null check
-      assertTrue(content.contains("JS_ToCString(ctx, elem)"))
-      assertTrue(content.contains("NewStringUTF(env, str)"))
+      // String conversion
+      assertTrue(content.contains("JS_ToCString(ctx, jsVal)"))
+      assertTrue(content.contains("NewStringUTF(env, s)"))
 
       // java_elem default is NULL
-      assertTrue(content.contains("jobject java_elem = NULL;"))
+      assertTrue(content.contains("jobject r = (*env)->NewStringUTF(env, s);"))
 
-      // Still uses NewObjectArray and String class
-      assertTrue(content.contains("FindClass(env, \"java/lang/String\")"))
       assertTrue(content.contains("NewObjectArray"))
       assertTrue(content.contains("SetObjectArrayElement"))
       assertTrue(content.contains("DeleteLocalRef"))

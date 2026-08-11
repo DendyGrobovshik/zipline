@@ -21,6 +21,12 @@ fun provideBridgedFloatHolder(): BridgedFloatHolder = BridgedTestValues.floatHol
 fun provideBridgedDoubleHolder(): BridgedDoubleHolder = BridgedTestValues.doubleHolder
 
 @JsExport
+fun provideBridgedNestedInlineHolder(): BridgedNestedInlineHolder = BridgedTestValues.nestedInlineHolder
+
+@JsExport
+fun provideBridgedNestedInlineHolderNull(): BridgedNestedInlineHolder = BridgedTestValues.nestedInlineHolderNull
+
+@JsExport
 fun provideBridgedListHolder(): BridgedListHolder = BridgedTestValues.listHolder
 
 @JsExport

@@ -97,22 +97,16 @@ private fun IrProperty.hasBackingField(): Boolean =
       //  TODO(gogabr): should I also check for `isFakeOverride`?
     overriddenSymbols.singleOrNull { !it.owner.parentAsClass.isInterface }?.owner?.hasBackingField() == true
 
-// Kotlin/JS IR always mangles override val backing fields to name_1.
-// This applies to ALL types: primitives (Double, Int), inline value classes
-// (Id, Dp), and reference types (Shape, Modifier). The backing field is
-// always name_1; the getter may or may not exist on the prototype.
-// Private properties also get _1 (e.g., _id → _id_1).
-// Does the property need a JS '_1' suffix
-// TODO(gogabr): find out whether there is further suffixing ('_2' etc) in deeper hierarchies
+// Public properties are read through their JS accessor (defineProp), which keeps the plain
+// Kotlin (and @JsName-pinned) name regardless of override depth — Kotlin/JS mangles the
+// backing fields to name_1, name_2, ... per override level, but the accessor is always the
+// plain name. Only properties without an accessor must be read from their backing field:
+// private properties and value-class boxes (both '_1'-mangled).
 private fun IrProperty.jsName(): String {
   val kotlinName = name.asString()
   val isPrivate =
     visibility == org.jetbrains.kotlin.descriptors.DescriptorVisibilities.PRIVATE
-  val isOverridden =
-    (overriddenSymbols.isNotEmpty() && !isFakeOverride) // TODO(gogabr): look at the overridden prop!
-  val jsPropertyName =
-    if (isOverridden || isPrivate || isInlineClass(parentAsClass)) "${kotlinName}_1" else kotlinName
-  return jsPropertyName
+  return if (isPrivate || isInlineClass(parentAsClass)) "${kotlinName}_1" else kotlinName
 }
 
 internal fun hasWithJS2HostBridgeAnnotation(irClass: IrClass): Boolean {

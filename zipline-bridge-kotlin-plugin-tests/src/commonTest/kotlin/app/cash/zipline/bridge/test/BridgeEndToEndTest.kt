@@ -15,6 +15,7 @@ package app.cash.zipline.bridge.test
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 
 /** The guest app module id, as assigned by ZiplineCompiler (./<entry file>.js). */
@@ -29,17 +30,6 @@ expect class TestHost() {
 
 /** Backend base64 decoder for the embedded guest bytecode. */
 expect fun decodeGuestBase64(encoded: String): ByteArray
-
-/**
- * Decodes an embedded guest module (a ZiplineFile container) into raw QuickJS bytecode.
- * The container format is parsed with the canonical [app.cash.zipline.loader.ZiplineFile] reader.
- */
-internal fun decodeGuestModule(encoded: String): ByteArray {
-  val container = app.cash.zipline.loader.ZiplineFile.read(
-    okio.Buffer().write(decodeGuestBase64(encoded)),
-  )
-  return container.quickjsBytecode.toByteArray()
-}
 
 class BridgeEndToEndTest {
   private lateinit var host: TestHost
@@ -70,6 +60,16 @@ class BridgeEndToEndTest {
   }
 
   @Test
+  fun bridgedNestedInlineHolder() {
+    assertEquals(BridgedTestValues.nestedInlineHolder, evalOne("provideBridgedNestedInlineHolder"))
+  }
+
+  @Test
+  fun bridgedNestedInlineHolderNull() {
+    assertEquals(BridgedTestValues.nestedInlineHolderNull, evalOne("provideBridgedNestedInlineHolderNull"))
+  }
+
+  @Test
   fun bridgedListHolder() {
     assertEquals(BridgedTestValues.listHolder, evalOne("provideBridgedListHolder"))
   }
@@ -92,18 +92,43 @@ class BridgeEndToEndTest {
   // New tests for collections
   @Test
   fun bridgedArray() {
-    assertEquals(BridgedTestValues.array, evalOne("provideBridgedArray"))
+    // Data class equality on array fields is reference-based; compare contents.
+    val actual = evalOne("provideBridgedArray") as BridgedArray
+    val expected = BridgedTestValues.array
+    assertContentEquals(expected.intArray, actual.intArray)
+    assertContentEquals(expected.stringArray, actual.stringArray)
+    assertContentEquals(expected.booleanArray, actual.booleanArray)
+    assertContentEquals(expected.doubleArray, actual.doubleArray)
+    assertContentEquals(expected.floatArray, actual.floatArray)
+    assertContentEquals(expected.byteArray, actual.byteArray)
+    assertContentEquals(expected.shortArray, actual.shortArray)
+    assertContentEquals(expected.charArray, actual.charArray)
+    assertEquals(expected.primitiveList, actual.primitiveList)
+    assertEquals(expected.stringList, actual.stringList)
   }
-
 
   @Test
   fun bridgedNestedStructure() {
-    assertEquals(BridgedTestValues.nestedStructure, evalOne("provideBridgedNestedStructure"))
+    val actual = evalOne("provideBridgedNestedStructure") as BridgedNestedStructure
+    val expected = BridgedTestValues.nestedStructure
+    expected.nestedArray.forEachIndexed { i, row ->
+      assertContentEquals(row, actual.nestedArray[i])
+    }
+    assertEquals(expected.nestedList, actual.nestedList)
+    expected.mixedStructure.forEachIndexed { i, row ->
+      row.forEachIndexed { j, arr ->
+        assertContentEquals(arr, actual.mixedStructure[i][j])
+      }
+    }
   }
 
   @Test
   fun bridgedEmptyCollections() {
-    assertEquals(BridgedTestValues.emptyCollections, evalOne("provideBridgedEmptyCollections"))
+    val actual = evalOne("provideBridgedEmptyCollections") as BridgedEmptyCollections
+    val expected = BridgedTestValues.emptyCollections
+    assertContentEquals(expected.emptyArray, actual.emptyArray)
+    assertEquals(expected.emptyList, actual.emptyList)
+    assertEquals(expected.emptyMap, actual.emptyMap)
   }
 
   // New tests for inheritance
@@ -140,7 +165,11 @@ class BridgeEndToEndTest {
   // New tests for generics
   @Test
   fun bridgedGenericClassInt() {
-    assertEquals(BridgedTestValues.genericInt, evalOne("provideBridgedGenericClassInt"))
+    // Erased type parameters: JS numbers arrive as their numeric equivalent
+    // (Integer on JVM, Double on Kotlin/Native), so compare via Number coercion.
+    val actual = evalOne("provideBridgedGenericClassInt") as BridgedGenericClass<*>
+    assertEquals(42.0, (actual.value as Number).toDouble())
+    assertEquals(listOf(1.0, 2.0, 3.0), actual.list.map { (it as Number).toDouble() })
   }
 
   @Test
@@ -150,7 +179,10 @@ class BridgeEndToEndTest {
 
   @Test
   fun bridgedMultiGenericClass() {
-    assertEquals(BridgedTestValues.multiGeneric, evalOne("provideBridgedMultiGenericClass"))
+    val actual = evalOne("provideBridgedMultiGenericClass") as BridgedMultiGenericClass<*, *>
+    assertEquals("key", actual.first)
+    assertEquals(42.0, (actual.second as Number).toDouble())
+    assertEquals(mapOf("key" to 42.0), actual.both.entries.associate { it.key.toString() to (it.value as Number).toDouble() })
   }
 
   @Test
@@ -160,7 +192,16 @@ class BridgeEndToEndTest {
 
   @Test
   fun bridgedNestedGeneric() {
-    assertEquals(BridgedTestValues.nestedGeneric, evalOne("provideBridgedNestedGeneric"))
+    val actual = evalOne("provideBridgedNestedGeneric") as BridgedNestedGeneric
+    // Numbers in erased generic positions arrive as numeric types; compare via Double coercion.
+    val mapOfLists = actual.mapOfLists.mapValues { (_, v) -> v.map { (it as Number).toDouble() } }
+    assertEquals(mapOf("list1" to listOf(1.0, 2.0, 3.0)), mapOfLists)
+    val listOfMaps = actual.listOfMaps.map { m -> m.entries.associate { it.key.toString() to (it.value as Number).toDouble() } }
+    assertEquals(listOf(mapOf("a" to 1.0, "b" to 2.0)), listOfMaps)
+    val complexNested = actual.complexNested.mapValues { (_, v) ->
+      v.map { m -> m.mapKeys { (it.key as Number).toDouble() } }
+    }
+    assertEquals(mapOf("outer" to listOf(mapOf(1.0 to "one", 2.0 to "two"))), complexNested)
   }
 
 }

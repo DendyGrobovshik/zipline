@@ -6,6 +6,7 @@ import org.jetbrains.kotlin.ir.types.IrSimpleType
 import org.jetbrains.kotlin.ir.types.classFqName
 import org.jetbrains.kotlin.ir.types.getClass
 import org.jetbrains.kotlin.ir.types.isMarkedNullable
+import org.jetbrains.kotlin.ir.util.fqNameWhenAvailable
 
 /** All data types and type mapping tables extracted from ZiplineBridgeIrGenerationExtension.
  * These are now linked to the IR where possible for type safety.
@@ -16,7 +17,14 @@ data class FieldInfo(
   val isConstructorParam: Boolean,
   val jsPropertyName: String,
 ) {
-  val ktType: String by lazy { type.classFqName?.asString() ?: "" }
+  val ktType: String by lazy {
+    // Type parameters (T, U, …) have no classFqName: use the upper bound (or Any when unbounded)
+    // so bounded generics like BridgedBoundedGenericClass<T : Base> can infer T.
+    val direct = type.classFqName?.asString()
+    val tp = (type as? IrSimpleType)?.classifier?.owner as? org.jetbrains.kotlin.ir.declarations.IrTypeParameter
+    val bound = tp?.superTypes?.firstOrNull()?.classFqName?.asString()
+    direct ?: bound ?: "kotlin.Any"
+  }
   val isNullable: Boolean by lazy { (type as? IrSimpleType)?.isMarkedNullable() ?: false }
 
   val irClass: IrClass? by lazy { (type as? IrSimpleType)?.getClass() }
@@ -25,13 +33,28 @@ data class FieldInfo(
 
   val underlyingKtType: String? by lazy {
     if (isInline) {
-      irClass?.declarations
-        ?.filterIsInstance<org.jetbrains.kotlin.ir.declarations.IrConstructor>()
-        ?.firstOrNull { it.isPrimary }
-        ?.parameters
-        ?.firstOrNull { it.kind == org.jetbrains.kotlin.ir.declarations.IrParameterKind.Regular }
-        ?.type?.classFqName?.asString()
+      unwrapInlineUnderlying(irClass)
     } else null
+  }
+
+  /**
+   * Wrapper chain of an inline field from outermost to innermost, e.g. for
+   * value class Outer(val inner: Inner) where Inner is a value class: [Outer, Inner].
+   * Used to reconstruct the nested wrappers around the primitive value.
+   */
+  val inlineWrapperChain: List<String> by lazy {
+    if (isInline) {
+      val chain = mutableListOf<String>()
+      var clazz = irClass
+      while (clazz != null) {
+        val fqn = clazz.fqNameWhenAvailable?.asString() ?: break
+        chain.add(fqn)
+        clazz = inlineUnderlyingClass(clazz)?.takeIf { isInlineClass(it) }
+      }
+      chain
+    } else {
+      emptyList()
+    }
   }
 
   val wrapperKtType: String? by lazy { if (isInline) ktType else null }
@@ -48,6 +71,9 @@ data class FieldInfo(
         // Nullable primitives are stored as their boxed JNI type (e.g. Integer for Int?).
         if (isNullable && isJniPrimitive(typeStr)) {
           boxedJniDescriptor[typeStr] ?: kotlinToJniFieldType[typeStr]!!
+        } else if (typeStr == "kotlin.Array") {
+          // Array<T> descriptor must carry the element type (e.g. [Ljava/lang/String;), recursively.
+          "[" + elementJniDescriptor(arrayElementIrType)
         } else {
           kotlinToJniFieldType[typeStr]!!
         }
@@ -78,7 +104,48 @@ data class FieldInfo(
 
   val arrayElementType: String? by lazy { elementIrType?.classFqName?.asString() }
 
+  /** Raw IR type of the element for Array<T>/List<T>; null when unavailable. */
+  val arrayElementIrType: IrType? by lazy { elementIrType }
+
   val arrayElementNullable: Boolean by lazy { (elementIrType as? IrSimpleType)?.isMarkedNullable() ?: false }
+}
+
+/** JNI reference descriptor for an array element type (boxed primitives, String, objects, nested arrays). */
+internal fun elementJniDescriptor(elementType: IrType?): String {
+  val kt = effectiveClassFqn(elementType)
+  val elemClass = (elementType as? IrSimpleType)?.getClass()
+  return when {
+    kt == "kotlin.Array" -> "[" + elementJniDescriptor(typeArgument(elementType, 0))
+    kt == "kotlin.String" -> "Ljava/lang/String;"
+    kt in boxedJniDescriptor -> boxedJniDescriptor[kt]!!
+    elemClass != null -> jniTypeDescriptorForClass(elemClass)
+    else -> "Ljava/lang/Object;"
+  }
+}
+
+/** The single regular primary-constructor parameter type's class of an inline class, if any. */
+private fun inlineUnderlyingClass(clazz: IrClass?): IrClass? =
+  clazz?.declarations
+    ?.filterIsInstance<org.jetbrains.kotlin.ir.declarations.IrConstructor>()
+    ?.firstOrNull { it.isPrimary }
+    ?.parameters
+    ?.firstOrNull { it.kind == org.jetbrains.kotlin.ir.declarations.IrParameterKind.Regular }
+    ?.type
+    ?.let { (it as? IrSimpleType)?.getClass() }
+
+/** Recursively unwraps nested inline classes down to the primitive underlying FQN. */
+private fun unwrapInlineUnderlying(clazz: IrClass?): String? {
+  val underlyingClass = inlineUnderlyingClass(clazz)
+  return if (underlyingClass != null && isInlineClass(underlyingClass)) {
+    unwrapInlineUnderlying(underlyingClass)
+  } else {
+    clazz?.declarations
+      ?.filterIsInstance<org.jetbrains.kotlin.ir.declarations.IrConstructor>()
+      ?.firstOrNull { it.isPrimary }
+      ?.parameters
+      ?.firstOrNull { it.kind == org.jetbrains.kotlin.ir.declarations.IrParameterKind.Regular }
+      ?.type?.classFqName?.asString()
+  }
 }
 
 // -- JNI info data classes --
@@ -166,7 +233,7 @@ val arrayKotlinTypes = setOf(
 )
 
 val primitiveArrayJniInfo = mapOf(
-  "kotlin.BooleanArray" to PrimitiveArrayJniInfo("jboolean", "NewBooleanArray", "GetBooleanArrayElements", "ReleaseBooleanArrayElements", "JS_VALUE_GET_BOOL", "(jboolean)"),
+  "kotlin.BooleanArray" to PrimitiveArrayJniInfo("jboolean", "NewBooleanArray", "GetBooleanArrayElements", "ReleaseBooleanArrayElements", "JS_VALUE_GET_INT", "(jboolean)"),
   "kotlin.ByteArray" to PrimitiveArrayJniInfo("jbyte", "NewByteArray", "GetByteArrayElements", "ReleaseByteArrayElements", "JS_VALUE_GET_INT", "(jbyte)"),
   "kotlin.CharArray" to PrimitiveArrayJniInfo("jchar", "NewCharArray", "GetCharArrayElements", "ReleaseCharArrayElements", "JS_VALUE_GET_INT", "(jchar)"),
   "kotlin.ShortArray" to PrimitiveArrayJniInfo("jshort", "NewShortArray", "GetShortArrayElements", "ReleaseShortArrayElements", "JS_VALUE_GET_INT", "(jshort)"),
