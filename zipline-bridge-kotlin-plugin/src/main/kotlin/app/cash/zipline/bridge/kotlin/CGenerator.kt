@@ -122,14 +122,14 @@ internal fun generateBridgeFile(outputDir: String, annotatedClass: IrClass) {
     appendLine("#ifdef __ANDROID__")
     appendLine("        __android_log_print(ANDROID_LOG_WARN, \"BRIDGE\", \"_init FAILED: FindClass for $jniClassName\");")
     appendLine("#endif")
-    appendLine("        (*env)->ExceptionClear(env);")
+    appendLine("        // Leave the pending exception pending: it propagates to the JVM and crashes.")
     appendLine("        return;")
     appendLine("    }")
     appendLine("    _cls = (*env)->NewGlobalRef(env, local);")
     if (!isObject) {
       appendLine("    _ctor = (*env)->GetMethodID(env, _cls, \"<init>\", \"$constructorSig\");")
       appendLine("    if ((*env)->ExceptionCheck(env)) {")
-      appendLine("        (*env)->ExceptionClear(env);")
+      appendLine("        // Let the pending NoSuchMethodError propagate instead of clearing it.")
       appendLine("        _ctor = NULL;")
       appendLine("    }")
     }
@@ -137,7 +137,7 @@ internal fun generateBridgeFile(outputDir: String, annotatedClass: IrClass) {
       val outerJni = buildJniClassName(annotatedClass.parent as IrClass)
       appendLine("    {")
       appendLine("        jclass outerLocal = (*env)->FindClass(env, \"$outerJni\");")
-      appendLine("        if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); return; }")
+      appendLine("        if ((*env)->ExceptionCheck(env)) { /* pending exception propagates */ return; }")
       appendLine("        _outerCls = (*env)->NewGlobalRef(env, outerLocal);")
       appendLine("        _companionField = (*env)->GetStaticFieldID(env, _outerCls, \"Companion\", \"$instanceSig\");")
       appendLine("    }")
@@ -178,7 +178,7 @@ internal fun generateBridgeFile(outputDir: String, annotatedClass: IrClass) {
     for (f in bodyFields) {
       appendLine("    _fld_${f.name} = (*env)->GetFieldID(env, _cls, \"${f.name}\", \"${f.jniFieldType}\");")
       appendLine("    if ((*env)->ExceptionCheck(env)) {")
-      appendLine("        (*env)->ExceptionClear(env);")
+      appendLine("        // Let the pending NoSuchFieldError propagate instead of clearing it.")
       appendLine("        _fld_${f.name} = NULL;")
       appendLine("    }")
     }
