@@ -179,10 +179,15 @@ cklib {
   config.kotlinVersion = libs.versions.kotlin.get()
   create("quickjs") {
     language = C
-    srcDirs = project.files(file("native/quickjs"), file("native/common"))
+    srcDirs = project.files(
+      file("native/quickjs"),
+      file("native/common"),
+      file("src/nativeMain/c"),
+    )
     compilerArgs.addAll(
       listOf(
         //"-DDUMP_LEAKS=1", // For local testing ONLY!
+        "-I${file("native").absolutePath}",
         "-DCONFIG_VERSION=\"${quickJsVersion()}\"",
         "-Wno-unknown-pragmas",
         "-ftls-model=initial-exec",
@@ -291,4 +296,22 @@ configure<MavenPublishBaseExtension> {
   configure(
     KotlinMultiplatform(javadocJar = JavadocJar.Empty())
   )
+}
+
+// Bundle native headers into the AAR assets for consumer CMake builds.
+val copyBridgeHeaders by tasks.registering(Copy::class) {
+  from("native") {
+    include("bridge_dispatch.h")
+    include("quickjs/quickjs.h")
+  }
+  into(layout.buildDirectory.dir("generated/assets/bridge-headers"))
+}
+
+android {
+  sourceSets {
+    getByName("main").assets.srcDir(copyBridgeHeaders)
+  }
+}
+tasks.matching { it.name.startsWith("merge") && it.name.contains("Assets") }.configureEach {
+  dependsOn(copyBridgeHeaders)
 }

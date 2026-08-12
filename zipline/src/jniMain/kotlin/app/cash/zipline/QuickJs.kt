@@ -115,6 +115,10 @@ actual class QuickJs private constructor(
     return execute(bytecode)
   }
 
+  actual fun evaluateForBridge(script: String, fileName: String): Any? {
+    return evaluate(script, fileName)
+  }
+
   internal actual fun initOutboundChannel(outboundChannel: CallChannel) {
     setOutboundCallChannel(context, OUTBOUND_CHANNEL_NAME, outboundChannel)
   }
@@ -182,6 +186,14 @@ actual class QuickJs private constructor(
   private external fun setMaxStackSize(context: Long, stackSize: Long)
   @JvmName("initRdmaChangesChannel")
   private external fun initRdmaChangesChannel(context: Long)
+
+  internal actual fun bridgeInitAll() {
+    bridgeInitAllNative(getJsContext(context))
+  }
+
+  @JvmName("bridgeInitAllNative")
+  private external fun bridgeInitAllNative(jsContext: Long)
+  private external fun getJsContext(context: Long): Long
 }
 
 internal expect fun loadNativeLibrary()

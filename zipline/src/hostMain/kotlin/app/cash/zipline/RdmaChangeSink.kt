@@ -19,6 +19,7 @@ public interface RdmaChangeSink {
   fun createAdd(id: Int, childrenTag: Int, childId: Int, index: Int)
   fun createRemove(id: Int, childrenTag: Int, index: Int, detach: Boolean)
   fun createMove(id: Int, childrenTag: Int, fromIndex: Int, toIndex: Int, count: Int)
+  fun createBridgeChange(id: Int, wrapped: Any?)
 
   /**
    * Mark a previously-created Remove change as a detach.

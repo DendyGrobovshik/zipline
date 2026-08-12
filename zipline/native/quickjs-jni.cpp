@@ -18,6 +18,7 @@
 #include "Context.h"
 #include "InboundCallChannel.h"
 #include "ExceptionThrowers.h"
+#include "bridge_dispatch.h"
 
 extern "C" JNIEXPORT jlong JNICALL
 Java_app_cash_zipline_QuickJs_createContext(JNIEnv* env, jclass type) {
@@ -136,6 +137,12 @@ Java_app_cash_zipline_QuickJs_setMaxStackSize(JNIEnv* env, jobject type, jlong c
   context->setMaxStackSize(env, stackSize);
 }
 
+extern "C" JNIEXPORT jlong JNICALL
+Java_app_cash_zipline_QuickJs_getJsContext(JNIEnv*, jclass, jlong context_) {
+  Context* context = reinterpret_cast<Context*>(context_);
+  return reinterpret_cast<jlong>(context->jsContext);
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_app_cash_zipline_QuickJs_initRdmaChangesChannel(JNIEnv* env, jobject, jlong context_) {
   Context* context = reinterpret_cast<Context*>(context_);
@@ -180,4 +187,12 @@ Java_app_cash_zipline_JniCallChannel_disconnect(JNIEnv* env, jobject thiz, jlong
   }
 
   return channel->disconnect(context, env, instanceName);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_app_cash_zipline_QuickJs_bridgeInitAllNative(JNIEnv* env, jclass, jlong jsContext) {
+  init_all(env);
+  if (jsContext) {
+    register_all((JSContext*)jsContext);
+  }
 }
