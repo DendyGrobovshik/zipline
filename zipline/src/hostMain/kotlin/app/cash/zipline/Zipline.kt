@@ -92,7 +92,6 @@ actual class Zipline private constructor(
   init {
     // Eagerly publish the channel so the guest can call us.
     quickJs.initOutboundChannel(endpoint.inboundChannel)
-    quickJs.initRdmaChangesChannel()
 
     val eventLoop = CoroutineEventLoop(dispatcher, scope, guest)
 
@@ -100,6 +99,10 @@ actual class Zipline private constructor(
       name = ZIPLINE_HOST_NAME,
       instance = RealHostService(endpoint, this, eventListener, eventLoop),
     )
+  }
+
+  fun initRdmaChannel() {
+    quickJs.initRdmaChangesChannel()
   }
 
   actual fun <T : ZiplineService> bind(name: String, instance: T) {
