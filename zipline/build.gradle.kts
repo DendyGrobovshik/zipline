@@ -1,4 +1,5 @@
-import co.touchlab.cklib.gradle.CompileToBitcode.Language.C
+import java.util.concurrent.TimeUnit
+
 import com.vanniktech.maven.publish.JavadocJar
 import com.vanniktech.maven.publish.KotlinMultiplatform
 import com.vanniktech.maven.publish.MavenPublishBaseExtension
@@ -543,7 +544,7 @@ val stageHermesHostDylibs: TaskProvider<Sync> =
 // suite (dev-mode loadJsModule compiles JS on-device). Publish with:
 //   ./gradlew publish... -PhermesIosLean=true
 val hermesIosLean: Boolean =
-  providers.gradleProperty("hermesIosLean").orNull?.toBooleanStrictOrNull() ?: true
+  providers.gradleProperty("hermesIosLean").orNull?.toBooleanStrictOrNull() ?: false
 
 fun registerBuildHermesStaticIos(
   konanTarget: KonanTarget,
@@ -817,4 +818,22 @@ configure<MavenPublishBaseExtension> {
   configure(
     KotlinMultiplatform(javadocJar = JavadocJar.Empty())
   )
+}
+
+// Bundle native headers into the AAR assets for consumer CMake builds.
+val copyBridgeHeaders by tasks.registering(Copy::class) {
+  from("native") {
+    include("bridge_dispatch.h")
+    include("quickjs/quickjs.h")
+  }
+  into(layout.buildDirectory.dir("generated/assets/bridge-headers"))
+}
+
+android {
+  sourceSets {
+    getByName("main").assets.srcDir(copyBridgeHeaders)
+  }
+}
+tasks.matching { it.name.startsWith("merge") && it.name.contains("Assets") }.configureEach {
+  dependsOn(copyBridgeHeaders)
 }

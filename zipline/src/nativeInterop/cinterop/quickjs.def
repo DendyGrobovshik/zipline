@@ -20,6 +20,10 @@ static inline int JsValueGetInt(JSValue v) {
   return JS_VALUE_GET_INT(v);
 }
 
+static inline int64_t JsValueGetInt64(JSValue v) {
+  return JS_VALUE_GET_INT(v);
+}
+
 static inline int JsValueGetBool(JSValue v) {
   return JS_VALUE_GET_BOOL(v);
 }
@@ -58,6 +62,10 @@ static inline JSValue JsValueArrayToInstanceRef(JSValue* v, int i) {
 
 static inline JSValue JsNewTagInt(int val) {
   return JS_MKVAL(JS_TAG_INT, val);
+}
+
+static inline JSValue JsNewFloat64(double d) {
+  return JS_NewFloat64(NULL, d);
 }
 
 // RDMA Changes helpers
