@@ -55,6 +55,7 @@ extern "C" __attribute__((used, visibility("default"))) void init_all(JNIEnv* en
 static JSValue bridge_register_js(JSContext *ctx, JSValueConst this_val,
     int argc, JSValueConst *argv) {
     if (argc < 2) return JS_UNDEFINED;
+    if (bridgeTable.empty()) return JS_UNDEFINED;
     const char *fq = JS_ToCString(ctx, argv[0]);
     if (!fq) return JS_UNDEFINED;
     JSValue ctor = argv[1];
