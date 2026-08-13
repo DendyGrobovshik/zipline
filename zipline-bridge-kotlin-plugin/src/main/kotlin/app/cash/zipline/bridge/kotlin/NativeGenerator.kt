@@ -2,16 +2,20 @@ package app.cash.zipline.bridge.kotlin
 
 import org.jetbrains.kotlin.descriptors.ClassKind
 import org.jetbrains.kotlin.ir.declarations.IrClass
-import org.jetbrains.kotlin.ir.declarations.IrTypeParameter
 import org.jetbrains.kotlin.ir.types.IrSimpleType
 import org.jetbrains.kotlin.ir.types.IrType
 import org.jetbrains.kotlin.ir.types.IrTypeProjection
-import org.jetbrains.kotlin.ir.types.classFqName
+import org.jetbrains.kotlin.ir.types.getClass
+import org.jetbrains.kotlin.ir.types.isMarkedNullable
 import org.jetbrains.kotlin.ir.util.fqNameWhenAvailable
 import org.jetbrains.kotlin.ir.util.hasAnnotation
 import org.jetbrains.kotlin.name.FqName
+import java.io.File
 
 // -- Kotlin/Native bridge code generation (iOS) --
+// Hermes rewrite: uses COpaquePointer? (context) + Int (handle) instead of
+// CPointer<JSContext> + CValue<JSValue>. All JS value operations go through
+// HermesBridge_* C functions declared in hermes-ios.h.
 
 /** Marker for Redwood's generated-code-only APIs; the opt-in is only needed when the bridged class uses them. */
 private val REDWOOD_CODEGEN_API_FQN = FqName("app.cash.redwood.RedwoodCodegenApi")
@@ -23,7 +27,7 @@ private val MAP_KOTLIN_TYPES = setOf(
   "kotlin.collections.HashMap", "kotlin.collections.LinkedHashMap",
 )
 
-/** Primitive arrays supported by the generators (the native generator skips FloatArray fields entirely). */
+/** Primitive arrays supported by the generators. */
 internal val PRIMITIVE_ARRAY_ELEMENT_TYPE = mapOf(
   "kotlin.IntArray" to "kotlin.Int",
   "kotlin.FloatArray" to "kotlin.Float",
@@ -34,20 +38,6 @@ internal val PRIMITIVE_ARRAY_ELEMENT_TYPE = mapOf(
   "kotlin.ByteArray" to "kotlin.Byte",
   "kotlin.LongArray" to "kotlin.Long",
 )
-
-/** The [index]-th type argument of [type], if any. */
-internal fun typeArgument(type: IrType?, index: Int): IrType? =
-  (type as? IrSimpleType)?.arguments?.getOrNull(index)
-    ?.let { (it as? IrTypeProjection)?.type ?: (it as? IrType) }
-
-/** Effective (erased / upper-bound / Any) class FQN of a type; mirrors FieldInfo.ktType. */
-internal fun effectiveClassFqn(type: IrType?): String {
-  if (type == null) return "kotlin.Any"
-  val direct = type.classFqName?.asString()
-  if (direct != null) return direct
-  val typeParameter = (type as? IrSimpleType)?.classifier?.owner as? IrTypeParameter
-  return typeParameter?.superTypes?.firstOrNull()?.classFqName?.asString() ?: "kotlin.Any"
-}
 
 /** Wraps a converted primitive into the full inline wrapper chain (Outer(Inner(value))). */
 private fun inlineWrapExpression(field: FieldInfo, innerExpr: String): String {
@@ -78,197 +68,34 @@ private fun collectTypeImports(type: IrType?, acc: MutableSet<String>) {
 private fun collectRuntimeImports(
   type: IrType?,
   needsBridgeForAny: MutableSet<Unit>,
-  needsJsNumber: MutableSet<Unit>,
   needsJsLong: MutableSet<Unit>,
-  needsMapHelper: MutableSet<Unit>,
 ) {
   val ktType = effectiveClassFqn(type)
+  // Inline value class backed by Long (e.g. Color) converts via JsNumberToLong.
+  val elemClass = (type as? IrSimpleType)?.getClass()
+  if (elemClass != null && isInlineClass(elemClass) && unwrapInlineUnderlying(elemClass) == "kotlin.Long") {
+    needsJsLong.add(Unit)
+    return
+  }
   when {
     ktType == "kotlin.Any" -> needsBridgeForAny.add(Unit)
-    ktType == "kotlin.Double" || ktType == "kotlin.Float" -> needsJsNumber.add(Unit)
     ktType == "kotlin.Long" -> needsJsLong.add(Unit)
     ktType in MAP_KOTLIN_TYPES -> {
-      needsMapHelper.add(Unit)
-      // Map iteration converts keys/values through the converters below.
       (type as? IrSimpleType)?.arguments?.forEach { arg ->
-        collectRuntimeImports((arg as? IrTypeProjection)?.type ?: (arg as? IrType), needsBridgeForAny, needsJsNumber, needsJsLong, needsMapHelper)
+        collectRuntimeImports((arg as? IrTypeProjection)?.type ?: (arg as? IrType), needsBridgeForAny, needsJsLong)
       }
     }
     ktType == "kotlin.collections.List" || ktType == "kotlin.Array" -> {
       needsBridgeForAny.add(Unit)
       (type as? IrSimpleType)?.arguments?.forEach { arg ->
-        collectRuntimeImports((arg as? IrTypeProjection)?.type ?: (arg as? IrType), needsBridgeForAny, needsJsNumber, needsJsLong, needsMapHelper)
+        collectRuntimeImports((arg as? IrTypeProjection)?.type ?: (arg as? IrType), needsBridgeForAny, needsJsLong)
       }
     }
     ktType in PRIMITIVE_ARRAY_ELEMENT_TYPE -> {
-      // Elements are read with JsValueGet*/JsNumberTo* directly in the array helper.
-      val elem = PRIMITIVE_ARRAY_ELEMENT_TYPE[ktType]
-      if (elem == "kotlin.Long") needsJsLong.add(Unit)
-      if (elem == "kotlin.Double" || elem == "kotlin.Float") needsJsNumber.add(Unit)
+      if (PRIMITIVE_ARRAY_ELEMENT_TYPE[ktType] == "kotlin.Long") needsJsLong.add(Unit)
     }
     else -> needsBridgeForAny.add(Unit)
   }
-}
-
-/**
- * Returns the expression converting a JS value of [type] into Kotlin, appending any nested
- * helper functions to [helpers]. Simple types convert inline; collections recurse into helpers.
- */
-private fun jsValueToKotlinExpression(
-  helpers: StringBuilder,
-  name: String,
-  type: IrType?,
-  ctx: String,
-  expr: String,
-): String {
-  val ktType = effectiveClassFqn(type)
-  return when (ktType) {
-    "kotlin.Int" -> "(bridgeForAny($ctx, $expr) as Double).toInt()"
-    "kotlin.Float" -> "(bridgeForAny($ctx, $expr) as Double).toFloat()"
-    "kotlin.Double" -> "bridgeForAny($ctx, $expr) as Double"
-    "kotlin.Boolean" -> "bridgeForAny($ctx, $expr) as Boolean"
-    "kotlin.String" -> "bridgeForAny($ctx, $expr) as String"
-    "kotlin.Long" -> "JsNumberToLong($ctx, $expr)"
-    "kotlin.Any" -> "bridgeForAny($ctx, $expr) as Any"
-    "kotlin.collections.List" ->
-      emitListHelper(helpers, name, typeArgument(type, 0), ctx, expr)
-    "kotlin.Array" ->
-      emitArrayHelper(helpers, name, typeArgument(type, 0), ctx, expr)
-    in MAP_KOTLIN_TYPES ->
-      emitMapHelper(helpers, name, type, ctx, expr)
-    in PRIMITIVE_ARRAY_ELEMENT_TYPE ->
-      emitPrimitiveArrayHelper(helpers, name, ktType, ctx, expr)
-    else -> "bridgeForAny($ctx, $expr) as ${ktType.substringAfterLast(".")}"
-  }
-}
-
-private fun emitListHelper(
-  helpers: StringBuilder,
-  name: String,
-  elementType: IrType?,
-  ctx: String,
-  expr: String,
-): String {
-  val elementName = "${name}_element"
-  val renderedElement = renderedTypeName(elementType)
-  val pending = StringBuilder()
-  helpers.appendLine("private fun $name(ctx: CPointer<JSContext>, jsArr: CValue<JSValue>): List<$renderedElement> = run {")
-  // Kotlin/JS ArrayList wraps the JS array in a name-mangled 'array_1' property; unwrap it.
-  // The input is borrowed: only the lookup result is freed here; the caller frees the input.
-  helpers.appendLine("    var arr = jsArr")
-  helpers.appendLine("    val _tmpArr = JS_GetPropertyStr(ctx, jsArr, \"array_1\")")
-  helpers.appendLine("    if (JS_IsUndefined(_tmpArr) == 0) arr = _tmpArr")
-  helpers.appendLine("    val lenVal = JS_GetPropertyStr(ctx, arr, \"length\")")
-  helpers.appendLine("    val len = JsValueGetInt(lenVal)")
-  helpers.appendLine("    JS_FreeValue(ctx, lenVal)")
-  helpers.appendLine("    val result = mutableListOf<$renderedElement>()")
-  helpers.appendLine("    var i = 0")
-  helpers.appendLine("    while (i < len.toInt()) {")
-  helpers.appendLine("        val elem = JS_GetPropertyUint32(ctx, arr, i.toUInt())")
-  val elemConv = jsValueToKotlinExpression(pending, elementName, elementType, ctx, "elem")
-  helpers.appendLine("        result.add($elemConv)")
-  helpers.appendLine("        JS_FreeValue(ctx, elem)")
-  helpers.appendLine("        i++")
-  helpers.appendLine("    }")
-  helpers.appendLine("    JS_FreeValue(ctx, _tmpArr)")
-  helpers.appendLine("    result")
-  helpers.appendLine("}")
-  helpers.appendLine()
-  helpers.append(pending)
-  return "$name(ctx, $expr)"
-}
-
-private fun emitArrayHelper(
-  helpers: StringBuilder,
-  name: String,
-  elementType: IrType?,
-  ctx: String,
-  expr: String,
-): String {
-  val elementName = "${name}_element"
-  val renderedElement = renderedTypeName(elementType)
-  val pending = StringBuilder()
-  helpers.appendLine("private fun $name(ctx: CPointer<JSContext>, jsArr: CValue<JSValue>): Array<$renderedElement> = run {")
-  helpers.appendLine("    val lenVal = JS_GetPropertyStr(ctx, jsArr, \"length\")")
-  helpers.appendLine("    val len = JsValueGetInt(lenVal)")
-  helpers.appendLine("    JS_FreeValue(ctx, lenVal)")
-  helpers.appendLine("    val result = arrayOfNulls<$renderedElement>(len) as Array<$renderedElement>")
-  helpers.appendLine("    var i = 0")
-  helpers.appendLine("    while (i < len.toInt()) {")
-  helpers.appendLine("        val elem = JS_GetPropertyUint32(ctx, jsArr, i.toUInt())")
-  val elemConv = jsValueToKotlinExpression(pending, elementName, elementType, ctx, "elem")
-  helpers.appendLine("        result[i] = $elemConv")
-  helpers.appendLine("        JS_FreeValue(ctx, elem)")
-  helpers.appendLine("        i++")
-  helpers.appendLine("    }")
-  helpers.appendLine("    result")
-  helpers.appendLine("}")
-  helpers.appendLine()
-  helpers.append(pending)
-  return "$name(ctx, $expr)"
-}
-
-private fun emitPrimitiveArrayHelper(
-  helpers: StringBuilder,
-  name: String,
-  arrayKtType: String,
-  ctx: String,
-  expr: String,
-): String {
-  val kotlinArrayType = arrayKtType.substringAfterLast(".")
-  val elementType = PRIMITIVE_ARRAY_ELEMENT_TYPE[arrayKtType]!!
-  val elemConv = when (elementType) {
-    "kotlin.Int" -> "JsValueGetInt(elem)"
-    "kotlin.Boolean" -> "JsValueGetBool(elem) != 0"
-    "kotlin.Double" -> "JsNumberToDouble(elem)"
-    "kotlin.Float" -> "JsValueGetFloat64(elem).toFloat()"
-    "kotlin.Char" -> "JsValueGetInt(elem).toChar()"
-    "kotlin.Short" -> "JsValueGetInt(elem).toShort()"
-    "kotlin.Byte" -> "JsValueGetInt(elem).toByte()"
-    "kotlin.Long" -> "JsNumberToLong(ctx, elem)"
-    else -> error("unexpected primitive array element: $elementType")
-  }
-  helpers.appendLine("private fun $name(ctx: CPointer<JSContext>, jsArr: CValue<JSValue>): $kotlinArrayType = run {")
-  helpers.appendLine("    val lenVal = JS_GetPropertyStr(ctx, jsArr, \"length\")")
-  helpers.appendLine("    val len = JsValueGetInt(lenVal)")
-  helpers.appendLine("    JS_FreeValue(ctx, lenVal)")
-  helpers.appendLine("    val result = $kotlinArrayType(len)")
-  helpers.appendLine("    var i = 0")
-  helpers.appendLine("    while (i < len.toInt()) {")
-  helpers.appendLine("        val elem = JS_GetPropertyUint32(ctx, jsArr, i.toUInt())")
-  helpers.appendLine("        result[i] = $elemConv")
-  helpers.appendLine("        JS_FreeValue(ctx, elem)")
-  helpers.appendLine("        i++")
-  helpers.appendLine("    }")
-  helpers.appendLine("    result")
-  helpers.appendLine("}")
-  helpers.appendLine()
-  return "$name(ctx, $expr)"
-}
-
-private fun emitMapHelper(
-  helpers: StringBuilder,
-  name: String,
-  type: IrType?,
-  ctx: String,
-  expr: String,
-): String {
-  val keyType = typeArgument(type, 0)
-  val valueType = typeArgument(type, 1)
-  val renderedKey = renderedTypeName(keyType)
-  val renderedValue = renderedTypeName(valueType)
-  val keyName = "${name}_key"
-  val valueName = "${name}_value"
-  val pending = StringBuilder()
-  val keyConv = jsValueToKotlinExpression(pending, keyName, keyType, "ctx", "k")
-  val valueConv = jsValueToKotlinExpression(pending, valueName, valueType, "ctx", "v")
-  helpers.appendLine("private fun $name(ctx: CPointer<JSContext>, jsMap: CValue<JSValue>): Map<$renderedKey, $renderedValue> = jsMapToKotlin(ctx, jsMap,")
-  helpers.appendLine("  { k -> $keyConv },")
-  helpers.appendLine("  { v -> $valueConv },")
-  helpers.appendLine(") as Map<$renderedKey, $renderedValue>")
-  helpers.appendLine()
-  helpers.append(pending)
-  return "$name(ctx, $expr)"
 }
 
 internal fun generateNativeBridgeFile(outputDir: String, clazz: IrClass) {
@@ -290,8 +117,6 @@ internal fun generateNativeBridgeFile(outputDir: String, clazz: IrClass) {
   if (hasUnsupported) return
 
   val source = buildString {
-    appendLine("// GENERATED FILE. DO NOT MODIFY MANUALLY.")
-    appendLine()
     appendLine("@file:Suppress(\"UNUSED_PARAMETER\", \"unused\", \"INVISIBLE_MEMBER\", \"INVISIBLE_REFERENCE\", \"UNCHECKED_CAST\")")
     if (usesRedwoodCodegenApi) {
       appendLine("@file:OptIn(app.cash.redwood.RedwoodCodegenApi::class, kotlinx.cinterop.ExperimentalForeignApi::class)")
@@ -301,31 +126,21 @@ internal fun generateNativeBridgeFile(outputDir: String, clazz: IrClass) {
     appendLine("package generated_bridges")
     appendLine()
     appendLine("import kotlinx.cinterop.*")
-    appendLine("import app.cash.zipline.quickjs.*")
+    appendLine("import app.cash.zipline.hermes.*")
     appendLine("import app.cash.zipline.registerBridge")
     val needsBridgeForAny = mutableSetOf<Unit>()
-    val needsJsNumber = mutableSetOf<Unit>()
     val needsJsLong = mutableSetOf<Unit>()
-    val needsMapHelper = mutableSetOf<Unit>()
     for (field in fields) {
-      collectRuntimeImports(field.type, needsBridgeForAny, needsJsNumber, needsJsLong, needsMapHelper)
+      collectRuntimeImports(field.type, needsBridgeForAny, needsJsLong)
       if (field.isInline && field.underlyingKtType == "kotlin.Long") needsJsLong.add(Unit)
-      if (field.isInline && field.underlyingKtType in setOf("kotlin.Double", "kotlin.Float")) needsJsNumber.add(Unit)
     }
     if (needsBridgeForAny.isNotEmpty()) {
       appendLine("import app.cash.zipline.bridgeForAny")
     }
-    if (needsJsNumber.isNotEmpty()) {
-      appendLine("import app.cash.zipline.JsNumberToDouble")
-    }
     if (needsJsLong.isNotEmpty()) {
       appendLine("import app.cash.zipline.JsNumberToLong")
     }
-    if (needsMapHelper.isNotEmpty()) {
-      appendLine("import app.cash.zipline.jsMapToKotlin")
-    }
     // Import the target class and any inline wrapper types + object types
-    // Import parent class for nested classes (e.g., Modifier for Modifier.Companion)
     val parentFqn = (clazz.parent as? IrClass)?.fqNameWhenAvailable?.asString()
     val importFqn = parentFqn ?: fqn
     val imports = mutableSetOf(importForType(importFqn))
@@ -336,238 +151,236 @@ internal fun generateNativeBridgeFile(outputDir: String, clazz: IrClass) {
       ) {
         imports.add(importForType(field.ktType))
       }
-      // Recursively import every class referenced by collection/array/map field types.
       collectTypeImports(field.type, imports)
     }
     imports.filter { it.isNotEmpty() }.sorted().forEach { appendLine(it) }
     appendLine()
+    // Tag constants matching HermesBridge_getValueTag in hermes-ios.h
+    appendLine("private const val TAG_NULL = 0")
+    appendLine("private const val TAG_INT = 1")
+    appendLine("private const val TAG_DOUBLE = 2")
+    appendLine("private const val TAG_STRING = 3")
+    appendLine("private const val TAG_BOOL = 4")
+    appendLine("private const val TAG_OBJECT = 5")
+    appendLine("private const val TAG_ARRAY = 6")
+    appendLine("private const val TAG_UNDEFINED = 7")
+    appendLine()
     appendLine("public fun $functionName(")
-    appendLine("  ctx: CPointer<JSContext>,")
-    appendLine("  jsVal: CValue<JSValue>,")
-    appendLine("): Any {")
+    appendLine("  ctx: COpaquePointer?,")
+    appendLine("  jsValHandle: Int,")
+    appendLine("): COpaquePointer? {")
     // Generate field reads
     val helpers = StringBuilder()
     for (field in fields) {
       val propName = field.jsPropertyName
 
+      // Helpers to emit the common Hermes read/free preamble/suffix.
+      fun readProperty(): String =
+        "val ${field.name}Ref = HermesBridge_createHandle(ctx, jsValHandle, \"$propName\")"
+      fun freeRef(): String = "HermesBridge_freeHandle(ctx, ${field.name}Ref)"
+
       when {
         field.isInline && field.underlyingKtType == "kotlin.Int" -> {
-          appendLine("    val ${field.name}Raw = JS_GetPropertyStr(ctx, jsVal, \"$propName\")")
+          appendLine("    ${readProperty()}")
           if (field.isNullable) {
-            appendLine("    val ${field.name} = if (JS_IsUndefined(${field.name}Raw) != 0 || JS_IsNull(${field.name}Raw) != 0) null else ${inlineWrapExpression(field, "JsValueGetInt(${field.name}Raw)")}")
+            appendLine("    val ${field.name} = if (HermesBridge_getValueTag(ctx, ${field.name}Ref) == TAG_UNDEFINED || HermesBridge_getValueTag(ctx, ${field.name}Ref) == TAG_NULL) null")
+            appendLine("        else ${inlineWrapExpression(field, "HermesBridge_getValueDouble(ctx, ${field.name}Ref).toInt()")}")
           } else {
-            appendLine("    val ${field.name}Val = JsValueGetInt(${field.name}Raw)")
-            appendLine("    val ${field.name} = ${inlineWrapExpression(field, "${field.name}Val")}")
+            appendLine("    val ${field.name} = ${inlineWrapExpression(field, "HermesBridge_getValueDouble(ctx, ${field.name}Ref).toInt()")}")
           }
-          appendLine("    JS_FreeValue(ctx, ${field.name}Raw)")
+          appendLine("    ${freeRef()}")
         }
         field.isInline && field.underlyingKtType == "kotlin.Float" -> {
-          appendLine("    val ${field.name}Raw = JS_GetPropertyStr(ctx, jsVal, \"$propName\")")
+          appendLine("    ${readProperty()}")
           if (field.isNullable) {
-            appendLine("    val ${field.name} = if (JS_IsUndefined(${field.name}Raw) != 0 || JS_IsNull(${field.name}Raw) != 0) null else ${inlineWrapExpression(field, "JsValueGetFloat64(${field.name}Raw).toFloat()")}")
+            appendLine("    val ${field.name} = if (HermesBridge_getValueTag(ctx, ${field.name}Ref) == TAG_UNDEFINED || HermesBridge_getValueTag(ctx, ${field.name}Ref) == TAG_NULL) null")
+            appendLine("        else ${inlineWrapExpression(field, "HermesBridge_getValueDouble(ctx, ${field.name}Ref).toFloat()")}")
           } else {
-            appendLine("    val ${field.name}Val = JsValueGetFloat64(${field.name}Raw).toFloat()")
-            appendLine("    val ${field.name} = ${inlineWrapExpression(field, "${field.name}Val")}")
+            appendLine("    val ${field.name} = ${inlineWrapExpression(field, "HermesBridge_getValueDouble(ctx, ${field.name}Ref).toFloat()")}")
           }
-          appendLine("    JS_FreeValue(ctx, ${field.name}Raw)")
+          appendLine("    ${freeRef()}")
         }
         field.isInline && field.underlyingKtType == "kotlin.Double" -> {
-          appendLine("    val ${field.name}Raw = JS_GetPropertyStr(ctx, jsVal, \"$propName\")")
+          appendLine("    ${readProperty()}")
           if (field.isNullable) {
-            appendLine("    val ${field.name} = if (JS_IsUndefined(${field.name}Raw) != 0 || JS_IsNull(${field.name}Raw) != 0) null else ${inlineWrapExpression(field, "JsNumberToDouble(${field.name}Raw)")}")
+            appendLine("    val ${field.name} = if (HermesBridge_getValueTag(ctx, ${field.name}Ref) == TAG_UNDEFINED || HermesBridge_getValueTag(ctx, ${field.name}Ref) == TAG_NULL) null")
+            appendLine("        else ${inlineWrapExpression(field, "HermesBridge_getValueDouble(ctx, ${field.name}Ref)")}")
           } else {
-            appendLine("    val ${field.name}Val = JsNumberToDouble(${field.name}Raw)")
-            appendLine("    val ${field.name} = ${inlineWrapExpression(field, "${field.name}Val")}")
+            appendLine("    val ${field.name} = ${inlineWrapExpression(field, "HermesBridge_getValueDouble(ctx, ${field.name}Ref)")}")
           }
-          appendLine("    JS_FreeValue(ctx, ${field.name}Raw)")
+          appendLine("    ${freeRef()}")
         }
         field.isInline && field.underlyingKtType == "kotlin.Long" -> {
-          appendLine("    val ${field.name}Raw = JS_GetPropertyStr(ctx, jsVal, \"$propName\")")
+          appendLine("    ${readProperty()}")
           if (field.isNullable) {
-            appendLine("    val ${field.name} = if (JS_IsUndefined(${field.name}Raw) != 0 || JS_IsNull(${field.name}Raw) != 0) null else ${inlineWrapExpression(field, "JsNumberToLong(ctx, ${field.name}Raw)")}")
+            appendLine("    val ${field.name} = if (HermesBridge_getValueTag(ctx, ${field.name}Ref) == TAG_UNDEFINED || HermesBridge_getValueTag(ctx, ${field.name}Ref) == TAG_NULL) null")
+            appendLine("        else ${inlineWrapExpression(field, "JsNumberToLong(ctx, ${field.name}Ref)")}")
           } else {
-            appendLine("    val ${field.name}Val = JsNumberToLong(ctx, ${field.name}Raw)")
-            appendLine("    val ${field.name} = ${inlineWrapExpression(field, "${field.name}Val")}")
+            appendLine("    val ${field.name} = ${inlineWrapExpression(field, "JsNumberToLong(ctx, ${field.name}Ref)")}")
           }
-          appendLine("    JS_FreeValue(ctx, ${field.name}Raw)")
+          appendLine("    ${freeRef()}")
         }
-        !field.isInline && field.wrapperKtType.let { it != null } -> {
-          val wrapperName = field.wrapperKtType!!.substringAfterLast(".")
-          // Value class not detected as inline — treat as effectiveKtType + wrap
-          appendLine("    val ${field.name}Raw = JS_GetPropertyStr(ctx, jsVal, \"$propName\")")
-          when (field.ktType) {
-            "kotlin.Double" -> {
-              appendLine("    val ${field.name}Val = JsValueGetFloat64(${field.name}Raw).toFloat()")
-            }
-            "kotlin.Float" -> {
-              appendLine("    val ${field.name}Val = JsValueGetFloat64(${field.name}Raw).toFloat()")
-            }
-            else -> {
-              appendLine("    // TODO: unsupported wrapper effective type ${field.ktType}")
-              appendLine("    val ${field.name}Val = ${field.name}Raw  // stub")
-            }
-          }
-          appendLine("    val ${field.name} = $wrapperName(${field.name}Val)")
-          appendLine("    JS_FreeValue(ctx, ${field.name}Raw)")
-        }
-        field.ktType == "kotlin.Int" -> {
-          appendLine("    val ${field.name}Raw = JS_GetPropertyStr(ctx, jsVal, \"$propName\")")
+        field.effectiveKtType == "kotlin.Int" -> {
+          appendLine("    ${readProperty()}")
           if (field.isNullable) {
-            appendLine("    val ${field.name} = if (JS_IsUndefined(${field.name}Raw) != 0 || JS_IsNull(${field.name}Raw) != 0) null else JsValueGetInt(${field.name}Raw)")
+            appendLine("    val ${field.name} = if (HermesBridge_getValueTag(ctx, ${field.name}Ref) == TAG_UNDEFINED || HermesBridge_getValueTag(ctx, ${field.name}Ref) == TAG_NULL) null else HermesBridge_getValueDouble(ctx, ${field.name}Ref).toInt()")
           } else {
-            appendLine("    val ${field.name} = JsValueGetInt(${field.name}Raw)")
+            appendLine("    val ${field.name} = HermesBridge_getValueDouble(ctx, ${field.name}Ref).toInt()")
           }
-          appendLine("    JS_FreeValue(ctx, ${field.name}Raw)")
+          appendLine("    ${freeRef()}")
         }
-        field.ktType == "kotlin.Boolean" -> {
-          appendLine("    val ${field.name}Raw = JS_GetPropertyStr(ctx, jsVal, \"$propName\")")
+        field.effectiveKtType == "kotlin.Boolean" -> {
+          appendLine("    ${readProperty()}")
           if (field.isNullable) {
-            appendLine("    val ${field.name} = if (JS_IsUndefined(${field.name}Raw) != 0 || JS_IsNull(${field.name}Raw) != 0) null else JsValueGetBool(${field.name}Raw) != 0")
+            appendLine("    val ${field.name} = if (HermesBridge_getValueTag(ctx, ${field.name}Ref) == TAG_UNDEFINED || HermesBridge_getValueTag(ctx, ${field.name}Ref) == TAG_NULL) null else HermesBridge_getValueBool(ctx, ${field.name}Ref) != 0")
           } else {
-            appendLine("    val ${field.name} = JsValueGetBool(${field.name}Raw) != 0")
+            appendLine("    val ${field.name} = HermesBridge_getValueBool(ctx, ${field.name}Ref) != 0")
           }
-          appendLine("    JS_FreeValue(ctx, ${field.name}Raw)")
+          appendLine("    ${freeRef()}")
         }
-        field.ktType == "kotlin.Double" -> {
-          appendLine("    val ${field.name}Raw = JS_GetPropertyStr(ctx, jsVal, \"$propName\")")
+        field.effectiveKtType == "kotlin.Double" -> {
+          appendLine("    ${readProperty()}")
           if (field.isNullable) {
-            appendLine("    val ${field.name} = if (JS_IsUndefined(${field.name}Raw) != 0 || JS_IsNull(${field.name}Raw) != 0) null else JsNumberToDouble(${field.name}Raw)")
+            appendLine("    val ${field.name} = if (HermesBridge_getValueTag(ctx, ${field.name}Ref) == TAG_UNDEFINED || HermesBridge_getValueTag(ctx, ${field.name}Ref) == TAG_NULL) null else HermesBridge_getValueDouble(ctx, ${field.name}Ref)")
           } else {
-            appendLine("    val ${field.name} = JsNumberToDouble(${field.name}Raw)")
+            appendLine("    val ${field.name} = HermesBridge_getValueDouble(ctx, ${field.name}Ref)")
           }
-          appendLine("    JS_FreeValue(ctx, ${field.name}Raw)")
+          appendLine("    ${freeRef()}")
         }
-        field.ktType == "kotlin.Float" -> {
-          appendLine("    val ${field.name}Raw = JS_GetPropertyStr(ctx, jsVal, \"$propName\")")
+        field.effectiveKtType == "kotlin.Float" -> {
+          appendLine("    ${readProperty()}")
           if (field.isNullable) {
-            appendLine("    val ${field.name} = if (JS_IsUndefined(${field.name}Raw) != 0 || JS_IsNull(${field.name}Raw) != 0) null else JsNumberToDouble(${field.name}Raw).toFloat()")
+            appendLine("    val ${field.name} = if (HermesBridge_getValueTag(ctx, ${field.name}Ref) == TAG_UNDEFINED || HermesBridge_getValueTag(ctx, ${field.name}Ref) == TAG_NULL) null else HermesBridge_getValueDouble(ctx, ${field.name}Ref).toFloat()")
           } else {
-            appendLine("    val ${field.name} = JsNumberToDouble(${field.name}Raw).toFloat()")
+            appendLine("    val ${field.name} = HermesBridge_getValueDouble(ctx, ${field.name}Ref).toFloat()")
           }
-          appendLine("    JS_FreeValue(ctx, ${field.name}Raw)")
+          appendLine("    ${freeRef()}")
         }
-        field.ktType == "kotlin.Long" -> {
-          appendLine("    val ${field.name}Raw = JS_GetPropertyStr(ctx, jsVal, \"$propName\")")
+        field.effectiveKtType == "kotlin.Long" -> {
+          appendLine("    ${readProperty()}")
           if (field.isNullable) {
-            appendLine("    val ${field.name} = if (JS_IsUndefined(${field.name}Raw) != 0 || JS_IsNull(${field.name}Raw) != 0) null else JsNumberToLong(ctx, ${field.name}Raw)")
+            appendLine("    val ${field.name} = if (HermesBridge_getValueTag(ctx, ${field.name}Ref) == TAG_UNDEFINED || HermesBridge_getValueTag(ctx, ${field.name}Ref) == TAG_NULL) null else JsNumberToLong(ctx, ${field.name}Ref)")
           } else {
-            appendLine("    val ${field.name} = JsNumberToLong(ctx, ${field.name}Raw)")
+            appendLine("    val ${field.name} = JsNumberToLong(ctx, ${field.name}Ref)")
           }
-          appendLine("    JS_FreeValue(ctx, ${field.name}Raw)")
+          appendLine("    ${freeRef()}")
         }
-        field.ktType == "kotlin.String" -> {
-          appendLine("    val ${field.name}Raw = JS_GetPropertyStr(ctx, jsVal, \"$propName\")")
+        field.effectiveKtType == "kotlin.String" -> {
+          appendLine("    ${readProperty()}")
+          appendLine("    val ${field.name}Str = HermesBridge_getValueString(ctx, ${field.name}Ref)")
           if (field.isNullable) {
-            // Guard JS null/undefined BEFORE JS_ToCString: String(null) is "null", not null.
-            appendLine("    val ${field.name} = if (JS_IsUndefined(${field.name}Raw) != 0 || JS_IsNull(${field.name}Raw) != 0) null else { val s = JS_ToCString(ctx, ${field.name}Raw); s?.toKStringFromUtf8()?.also { JS_FreeCString(ctx, s) } }")
+            appendLine("    val ${field.name} = if (HermesBridge_getValueTag(ctx, ${field.name}Ref) == TAG_UNDEFINED || HermesBridge_getValueTag(ctx, ${field.name}Ref) == TAG_NULL) null else ${field.name}Str?.toKStringFromUtf8()?.also { platform.posix.free(${field.name}Str) }")
           } else {
-            appendLine("    val ${field.name} = JS_ToCString(ctx, ${field.name}Raw)?.toKStringFromUtf8() ?: \"\"")
+            appendLine("    val ${field.name} = ${field.name}Str?.toKStringFromUtf8()?.also { platform.posix.free(${field.name}Str) } ?: \"\"")
           }
-          appendLine("    JS_FreeValue(ctx, ${field.name}Raw)")
-        }
-        field.isObjectType && field.ktType != "kotlin.collections.List" &&
-          field.effectiveKtType !in MAP_KOTLIN_TYPES -> {
-          val typeName = field.ktType.substringAfterLast(".")
-          val castName = if (typeName == "List") "Any" else typeName
-          appendLine("    val ${field.name}Ref = JS_GetPropertyStr(ctx, jsVal, \"$propName\")")
-          if (field.isNullable) {
-            appendLine("    val ${field.name} = if (JS_IsUndefined(${field.name}Ref) != 0 || JS_IsNull(${field.name}Ref) != 0) null else {")
-            appendLine("        val dispatch = JS_GetPropertyStr(ctx, ${field.name}Ref, \"bridge_dispatch\")")
-            appendLine("        val dispatchFn = JsValueGetFloat64(dispatch).toRawBits().toCPointer<UByteVar>()!!.asStableRef<(CPointer<JSContext>, CValue<JSValue>) -> Any>()")
-            appendLine("        val result = dispatchFn.get()(ctx, ${field.name}Ref) as $castName")
-            appendLine("        JS_FreeValue(ctx, dispatch)")
-            appendLine("        result")
-            appendLine("    }")
-          } else {
-            appendLine("    val ${field.name}Dispatch = JS_GetPropertyStr(ctx, ${field.name}Ref, \"bridge_dispatch\")")
-            appendLine("    val ${field.name}DispatchFn = JsValueGetFloat64(${field.name}Dispatch).toRawBits().toCPointer<UByteVar>()!!.asStableRef<(CPointer<JSContext>, CValue<JSValue>) -> Any>()")
-            appendLine("    val ${field.name} = ${field.name}DispatchFn.get()(ctx, ${field.name}Ref) as $castName")
-            appendLine("    JS_FreeValue(ctx, ${field.name}Dispatch)")
-          }
-          appendLine("    JS_FreeValue(ctx, ${field.name}Ref)")
-        }
-        field.ktType == "kotlin.collections.List" -> {
-          appendLine("    val ${field.name}Raw = JS_GetPropertyStr(ctx, jsVal, \"$propName\")")
-          // Kotlin/JS ArrayList wraps the JS array in a name-mangled 'array_1' property.
-          appendLine("    var ${field.name}Arr = ${field.name}Raw")
-          appendLine("    var _tmpArr_${field.name} = JS_GetPropertyStr(ctx, ${field.name}Raw, \"array_1\")")
-          appendLine("    if (JS_IsUndefined(_tmpArr_${field.name}) == 0) {")
-          appendLine("        JS_FreeValue(ctx, ${field.name}Raw)")
-          appendLine("        ${field.name}Arr = _tmpArr_${field.name}")
-          appendLine("    }")
-          val renderedElement = renderedTypeName(field.arrayElementIrType)
-          val conv = emitListHelper(helpers, "conv_${field.name}", field.arrayElementIrType, "ctx", "${field.name}Arr")
-          if (field.isNullable) {
-            appendLine("    val ${field.name}: List<$renderedElement>? = if (JS_IsUndefined(${field.name}Arr) != 0 || JS_IsNull(${field.name}Arr) != 0) null else {")
-            appendLine("        val result = $conv")
-            appendLine("        JS_FreeValue(ctx, ${field.name}Arr)")
-            appendLine("        result")
-            appendLine("    }")
-          } else {
-            appendLine("    val ${field.name}: List<$renderedElement> = $conv")
-            appendLine("    JS_FreeValue(ctx, ${field.name}Arr)")
-          }
-        }
-        field.effectiveKtType in PRIMITIVE_ARRAY_ELEMENT_TYPE -> {
-          appendLine("    val ${field.name}Raw = JS_GetPropertyStr(ctx, jsVal, \"$propName\")")
-          val arrayType = field.effectiveKtType.substringAfterLast(".")
-          val conv = emitPrimitiveArrayHelper(helpers, "conv_${field.name}", field.effectiveKtType, "ctx", "${field.name}Raw")
-          if (field.isNullable) {
-            appendLine("    val ${field.name}: $arrayType? = if (JS_IsUndefined(${field.name}Raw) != 0 || JS_IsNull(${field.name}Raw) != 0) null else {")
-            appendLine("        val result = $conv")
-            appendLine("        JS_FreeValue(ctx, ${field.name}Raw)")
-            appendLine("        result")
-            appendLine("    }")
-          } else {
-            appendLine("    val ${field.name}: $arrayType = $conv")
-            appendLine("    JS_FreeValue(ctx, ${field.name}Raw)")
-          }
-        }
-        field.effectiveKtType == "kotlin.Array" -> {
-          appendLine("    val ${field.name}Raw = JS_GetPropertyStr(ctx, jsVal, \"$propName\")")
-          val renderedElement = renderedTypeName(field.arrayElementIrType)
-          val conv = emitArrayHelper(helpers, "conv_${field.name}", field.arrayElementIrType, "ctx", "${field.name}Raw")
-          if (field.isNullable) {
-            appendLine("    val ${field.name}: Array<$renderedElement>? = if (JS_IsUndefined(${field.name}Raw) != 0 || JS_IsNull(${field.name}Raw) != 0) null else {")
-            appendLine("        val result = $conv")
-            appendLine("        JS_FreeValue(ctx, ${field.name}Raw)")
-            appendLine("        result")
-            appendLine("    }")
-          } else {
-            appendLine("    val ${field.name}: Array<$renderedElement> = $conv")
-            appendLine("    JS_FreeValue(ctx, ${field.name}Raw)")
-          }
+          appendLine("    ${freeRef()}")
         }
         field.effectiveKtType in MAP_KOTLIN_TYPES -> {
-          appendLine("    val ${field.name}Raw = JS_GetPropertyStr(ctx, jsVal, \"$propName\")")
-          val renderedKey = renderedTypeName(typeArgument(field.type, 0))
-          val renderedValue = renderedTypeName(typeArgument(field.type, 1))
-          val conv = emitMapHelper(helpers, "conv_${field.name}", field.type, "ctx", "${field.name}Raw")
+          val keyType = typeArgument(field.type, 0)
+          val valueType = typeArgument(field.type, 1)
+          val renderedKey = renderedTypeName(keyType)
+          val renderedValue = renderedTypeName(valueType)
+          appendLine("    val ${field.name}Ref = HermesBridge_createHandle(ctx, jsValHandle, \"$propName\")")
+          appendLine("    val ${field.name}Tag = HermesBridge_getValueTag(ctx, ${field.name}Ref)")
           if (field.isNullable) {
-            appendLine("    val ${field.name}: Map<$renderedKey, $renderedValue>? = if (JS_IsUndefined(${field.name}Raw) != 0 || JS_IsNull(${field.name}Raw) != 0) null else {")
-            appendLine("        val result = $conv")
-            appendLine("        JS_FreeValue(ctx, ${field.name}Raw)")
-            appendLine("        result")
+            appendLine("    val ${field.name}: Map<$renderedKey, $renderedValue>? = if (${field.name}Tag == TAG_UNDEFINED || ${field.name}Tag == TAG_NULL) null else memScoped {")
+          } else {
+            appendLine("    val ${field.name}: Map<$renderedKey, $renderedValue> = memScoped {")
+          }
+          appendLine("        val keysHandle = alloc<IntVar>()")
+          appendLine("        val valuesHandle = alloc<IntVar>()")
+          appendLine("        HermesBridge_getMapEntries(ctx, ${field.name}Ref, keysHandle.ptr, valuesHandle.ptr)")
+          appendLine("        val map = mutableMapOf<$renderedKey, $renderedValue>()")
+          appendLine("        val len = HermesBridge_getArrayLength(ctx, keysHandle.value)")
+          appendLine("        var i = 0")
+          appendLine("        while (i < len) {")
+          appendLine("            val keyRef = HermesBridge_createArrayElementHandle(ctx, keysHandle.value, i)")
+          appendLine("            val valueRef = HermesBridge_createArrayElementHandle(ctx, valuesHandle.value, i)")
+          val keyExpr = emitElementConversion(helpers, "conv_${field.name}_key", keyType, "ctx", "keyRef")
+          val valueExpr = emitElementConversion(helpers, "conv_${field.name}_value", valueType, "ctx", "valueRef")
+          appendLine("            map[$keyExpr] = $valueExpr")
+          appendLine("            HermesBridge_freeHandle(ctx, keyRef)")
+          appendLine("            HermesBridge_freeHandle(ctx, valueRef)")
+          appendLine("            i++")
+          appendLine("        }")
+          appendLine("        HermesBridge_freeHandle(ctx, keysHandle.value)")
+          appendLine("        HermesBridge_freeHandle(ctx, valuesHandle.value)")
+          appendLine("        map")
+          appendLine("    }")
+          appendLine("    ${freeRef()}")
+        }
+        field.effectiveKtType == "kotlin.collections.List" -> {
+          val renderedElement = renderedTypeName(field.arrayElementIrType)
+          appendLine("    val ${field.name}Ref = HermesBridge_createHandle(ctx, jsValHandle, \"$propName\")")
+          // Kotlin/JS ArrayList wraps the JS array in a name-mangled 'array_1' property.
+          appendLine("    var ${field.name}ArrRef = ${field.name}Ref")
+          appendLine("    val _tmpArrRef_${field.name} = HermesBridge_createHandle(ctx, ${field.name}Ref, \"array_1\")")
+          appendLine("    if (HermesBridge_getValueTag(ctx, _tmpArrRef_${field.name}) != TAG_UNDEFINED) {")
+          appendLine("        HermesBridge_freeHandle(ctx, ${field.name}Ref)")
+          appendLine("        ${field.name}ArrRef = _tmpArrRef_${field.name}")
+          appendLine("    }")
+          val conv = emitListHelper(helpers, "conv_${field.name}", field.arrayElementIrType, "ctx", "${field.name}ArrRef")
+          if (field.isNullable) {
+            appendLine("    val ${field.name}: List<$renderedElement>? = if (HermesBridge_getValueTag(ctx, ${field.name}ArrRef) == TAG_UNDEFINED || HermesBridge_getValueTag(ctx, ${field.name}ArrRef) == TAG_NULL) null else $conv")
+          } else {
+            appendLine("    val ${field.name}: List<$renderedElement> = $conv")
+          }
+          appendLine("    HermesBridge_freeHandle(ctx, ${field.name}ArrRef)")
+        }
+        field.effectiveKtType in PRIMITIVE_ARRAY_ELEMENT_TYPE -> {
+          val arrayType = field.effectiveKtType.substringAfterLast(".")
+          appendLine("    val ${field.name}Ref = HermesBridge_createHandle(ctx, jsValHandle, \"$propName\")")
+          val conv = emitPrimitiveArrayHelper(helpers, "conv_${field.name}", field.effectiveKtType, "ctx", "${field.name}Ref")
+          if (field.isNullable) {
+            appendLine("    val ${field.name}: $arrayType? = if (HermesBridge_getValueTag(ctx, ${field.name}Ref) == TAG_UNDEFINED || HermesBridge_getValueTag(ctx, ${field.name}Ref) == TAG_NULL) null else $conv")
+          } else {
+            appendLine("    val ${field.name}: $arrayType = $conv")
+          }
+          appendLine("    ${freeRef()}")
+        }
+        field.effectiveKtType == "kotlin.Array" -> {
+          val renderedElement = renderedTypeName(field.arrayElementIrType)
+          appendLine("    val ${field.name}Ref = HermesBridge_createHandle(ctx, jsValHandle, \"$propName\")")
+          val conv = emitArrayHelper(helpers, "conv_${field.name}", field.arrayElementIrType, "ctx", "${field.name}Ref")
+          if (field.isNullable) {
+            appendLine("    val ${field.name}: Array<$renderedElement>? = if (HermesBridge_getValueTag(ctx, ${field.name}Ref) == TAG_UNDEFINED || HermesBridge_getValueTag(ctx, ${field.name}Ref) == TAG_NULL) null else $conv")
+          } else {
+            appendLine("    val ${field.name}: Array<$renderedElement> = $conv")
+          }
+          appendLine("    ${freeRef()}")
+        }
+        field.isObjectType && field.ktType != "kotlin.Any" -> {
+          val typeName = field.ktType.substringAfterLast(".")
+          appendLine("    val ${field.name}Ref = HermesBridge_createHandle(ctx, jsValHandle, \"$propName\")")
+          appendLine("    val ${field.name}DispPtr = HermesBridge_getBridgeDispatch(ctx, ${field.name}Ref)")
+          if (field.isNullable) {
+            appendLine("    val ${field.name} = if (${field.name}DispPtr == 0L) null else {")
+            appendLine("        val ${field.name}DispatchFn = ${field.name}DispPtr.toCPointer<CFunction<(COpaquePointer?, Int) -> COpaquePointer?>>()!!")
+            appendLine("        ${field.name}DispatchFn(ctx, ${field.name}Ref)?.asStableRef<Any>()?.get() as? $typeName")
             appendLine("    }")
           } else {
-            appendLine("    val ${field.name}: Map<$renderedKey, $renderedValue> = $conv")
-            appendLine("    JS_FreeValue(ctx, ${field.name}Raw)")
+            appendLine("    if (${field.name}DispPtr == 0L) {")
+            appendLine("        throw IllegalStateException(\"BRIDGE: non-nullable field ${field.name} ($typeName) — bridge_dispatch not found\")")
+            appendLine("    }")
+            appendLine("    val ${field.name}DispatchFn = ${field.name}DispPtr.toCPointer<CFunction<(COpaquePointer?, Int) -> COpaquePointer?>>()!!")
+            appendLine("    val ${field.name} = ${field.name}DispatchFn(ctx, ${field.name}Ref)!!.asStableRef<Any>().get() as $typeName")
           }
+          appendLine("    ${freeRef()}")
         }
         field.ktType == "kotlin.Any" -> {
-          appendLine("    val ${field.name}Raw = JS_GetPropertyStr(ctx, jsVal, \"$propName\")")
+          appendLine("    val ${field.name}Ref = HermesBridge_createHandle(ctx, jsValHandle, \"$propName\")")
           if (field.isNullable) {
-            appendLine("    val ${field.name}: Any? = bridgeForAny(ctx, ${field.name}Raw)")
+            appendLine("    val ${field.name}: Any? = bridgeForAny(ctx, ${field.name}Ref)")
           } else {
-            appendLine("    val ${field.name}: Any = bridgeForAny(ctx, ${field.name}Raw)!!")
+            appendLine("    val ${field.name}: Any = bridgeForAny(ctx, ${field.name}Ref) as Any")
           }
-          appendLine("    JS_FreeValue(ctx, ${field.name}Raw)")
+          appendLine("    ${freeRef()}")
         }
         else -> {
-          appendLine("    val ${field.name}Raw = JS_GetPropertyStr(ctx, jsVal, \"$propName\")")
+          appendLine("    val ${field.name}Ref = HermesBridge_createHandle(ctx, jsValHandle, \"$propName\")")
           appendLine("    // TODO: unsupported type ${field.ktType} (isObjectType=${field.isObjectType}, isInline=${field.isInline})")
-          appendLine("    val ${field.name} = ${field.name}Raw  // stub")
-          appendLine("    JS_FreeValue(ctx, ${field.name}Raw)")
+          appendLine("    val ${field.name} = ${field.name}Ref  // stub")
+          appendLine("    ${freeRef()}")
         }
       }
     }
@@ -579,9 +392,9 @@ internal fun generateNativeBridgeFile(outputDir: String, clazz: IrClass) {
     val qualifier = ((clazz.parent as? IrClass)?.name?.asString()?.plus(".")) ?: ""
     if (clazz.kind == ClassKind.ENUM_CLASS) {
       // Enum — read ordinal, return entries[ordinal]
-      appendLine("    val ordinalRaw = JS_GetPropertyStr(ctx, jsVal, \"ordinal_1\")")
-      appendLine("    val ordinal = JsValueGetInt(ordinalRaw)")
-      appendLine("    JS_FreeValue(ctx, ordinalRaw)")
+      appendLine("    val ordinalRef = HermesBridge_createHandle(ctx, jsValHandle, \"ordinal_1\")")
+      appendLine("    val ordinal = HermesBridge_getValueDouble(ctx, ordinalRef).toInt()")
+      appendLine("    HermesBridge_freeHandle(ctx, ordinalRef)")
       appendLine("    val _obj = $qualifier$className.entries[ordinal]")
     } else if (ctorFields.isNotEmpty()) {
       appendLine("    @Suppress(\"UNCHECKED_CAST\")")
@@ -598,7 +411,7 @@ internal fun generateNativeBridgeFile(outputDir: String, clazz: IrClass) {
     for (field in bodyFields) {
       appendLine("    _obj.${field.name} = ${field.name}")
     }
-    appendLine("    return _obj")
+    appendLine("    return StableRef.create(_obj).asCPointer()")
     appendLine("}")
     appendLine()
     // Nested collection/array/map converters (may be empty).
@@ -607,15 +420,207 @@ internal fun generateNativeBridgeFile(outputDir: String, clazz: IrClass) {
     appendLine("@OptIn(kotlin.ExperimentalStdlibApi::class)")
     appendLine("@kotlin.native.EagerInitialization")
     appendLine("private val _bridgeInit_${functionName} = run {")
-    appendLine("    registerBridge(\"$fqn\", ::$functionName)")
+    appendLine("    registerBridge(\"$fqn\", staticCFunction(::$functionName))")
     appendLine("    Unit")
     appendLine("}")
   }
 
   val fileName = "${fqn.replace(".", "_")}_bridge_native.kt"
-  val file = java.io.File(outputDir, fileName)
+  val file = File(outputDir, fileName)
   file.parentFile.mkdirs()
   file.writeText(source)
+}
+
+/**
+ * Emits a helper function that converts a JS handle (pointing to a JS array) into a Kotlin
+ * [List], and returns the expression that calls it.
+ */
+private fun emitListHelper(
+  helpers: StringBuilder,
+  name: String,
+  elementType: IrType?,
+  ctx: String,
+  expr: String,
+): String {
+  val elementName = "${name}_element"
+  val renderedElement = renderedTypeName(elementType)
+  val pending = StringBuilder()
+  helpers.appendLine("private fun $name(ctx: COpaquePointer?, jsArrHandle: Int): List<$renderedElement> = run {")
+  helpers.appendLine("    var arr = jsArrHandle")
+  helpers.appendLine("    val _tmpArr = HermesBridge_createHandle(ctx, jsArrHandle, \"array_1\")")
+  helpers.appendLine("    if (HermesBridge_getValueTag(ctx, _tmpArr) != TAG_UNDEFINED) {")
+  helpers.appendLine("        arr = _tmpArr")
+  helpers.appendLine("    }")
+  helpers.appendLine("    val len = HermesBridge_getArrayLength(ctx, arr)")
+  helpers.appendLine("    val result = mutableListOf<$renderedElement>()")
+  helpers.appendLine("    var i = 0")
+  helpers.appendLine("    while (i < len) {")
+  helpers.appendLine("        val elemRef = HermesBridge_createArrayElementHandle(ctx, arr, i)")
+  val elemConv = emitElementConversion(pending, elementName, elementType, ctx, "elemRef")
+  helpers.appendLine("        result.add($elemConv)")
+  helpers.appendLine("        HermesBridge_freeHandle(ctx, elemRef)")
+  helpers.appendLine("        i++")
+  helpers.appendLine("    }")
+  helpers.appendLine("    HermesBridge_freeHandle(ctx, _tmpArr)")
+  helpers.appendLine("    result")
+  helpers.appendLine("}")
+  helpers.appendLine()
+  helpers.append(pending)
+  return "$name(ctx, $expr)"
+}
+
+/** Emits a helper function that converts a JS handle (JS array) into a Kotlin Array<T>. */
+private fun emitArrayHelper(
+  helpers: StringBuilder,
+  name: String,
+  elementType: IrType?,
+  ctx: String,
+  expr: String,
+): String {
+  val elementName = "${name}_element"
+  val renderedElement = renderedTypeName(elementType)
+  val pending = StringBuilder()
+  helpers.appendLine("private fun $name(ctx: COpaquePointer?, jsArrHandle: Int): Array<$renderedElement> = run {")
+  helpers.appendLine("    val len = HermesBridge_getArrayLength(ctx, jsArrHandle)")
+  helpers.appendLine("    val result = arrayOfNulls<$renderedElement>(len)")
+  helpers.appendLine("    var i = 0")
+  helpers.appendLine("    while (i < len) {")
+  helpers.appendLine("        val elemRef = HermesBridge_createArrayElementHandle(ctx, jsArrHandle, i)")
+  val elemConv = emitElementConversion(pending, elementName, elementType, ctx, "elemRef")
+  helpers.appendLine("        result[i] = $elemConv")
+  helpers.appendLine("        HermesBridge_freeHandle(ctx, elemRef)")
+  helpers.appendLine("        i++")
+  helpers.appendLine("    }")
+  helpers.appendLine("    @Suppress(\"UNCHECKED_CAST\")")
+  helpers.appendLine("    result as Array<$renderedElement>")
+  helpers.appendLine("}")
+  helpers.appendLine()
+  helpers.append(pending)
+  return "$name(ctx, $expr)"
+}
+
+/** Emits a helper function that converts a JS handle (JS Map) into a Kotlin Map<K, V>. */
+private fun emitMapHelper(
+  helpers: StringBuilder,
+  name: String,
+  type: IrType?,
+  ctx: String,
+  expr: String,
+): String {
+  val keyType = typeArgument(type, 0)
+  val valueType = typeArgument(type, 1)
+  val renderedKey = renderedTypeName(keyType)
+  val renderedValue = renderedTypeName(valueType)
+  val keyName = "${name}_key"
+  val valueName = "${name}_value"
+  val pending = StringBuilder()
+  helpers.appendLine("private fun $name(ctx: COpaquePointer?, jsMapHandle: Int): Map<$renderedKey, $renderedValue> = memScoped {")
+  helpers.appendLine("    val keysHandle = alloc<IntVar>()")
+  helpers.appendLine("    val valuesHandle = alloc<IntVar>()")
+  helpers.appendLine("    HermesBridge_getMapEntries(ctx, jsMapHandle, keysHandle.ptr, valuesHandle.ptr)")
+  helpers.appendLine("    val map = mutableMapOf<$renderedKey, $renderedValue>()")
+  helpers.appendLine("    val len = HermesBridge_getArrayLength(ctx, keysHandle.value)")
+  helpers.appendLine("    var i = 0")
+  helpers.appendLine("    while (i < len) {")
+  helpers.appendLine("        val keyRef = HermesBridge_createArrayElementHandle(ctx, keysHandle.value, i)")
+  helpers.appendLine("        val valueRef = HermesBridge_createArrayElementHandle(ctx, valuesHandle.value, i)")
+  val keyConv = emitElementConversion(pending, keyName, keyType, ctx, "keyRef")
+  val valueConv = emitElementConversion(pending, valueName, valueType, ctx, "valueRef")
+  helpers.appendLine("        map[$keyConv] = $valueConv")
+  helpers.appendLine("        HermesBridge_freeHandle(ctx, keyRef)")
+  helpers.appendLine("        HermesBridge_freeHandle(ctx, valueRef)")
+  helpers.appendLine("        i++")
+  helpers.appendLine("    }")
+  helpers.appendLine("    HermesBridge_freeHandle(ctx, keysHandle.value)")
+  helpers.appendLine("    HermesBridge_freeHandle(ctx, valuesHandle.value)")
+  helpers.appendLine("    map")
+  helpers.appendLine("}")
+  helpers.appendLine()
+  helpers.append(pending)
+  return "$name(ctx, $expr)"
+}
+
+/** Emits a helper function that converts a JS handle (JS array) into a Kotlin primitive array. */
+private fun emitPrimitiveArrayHelper(
+  helpers: StringBuilder,
+  name: String,
+  arrayKtType: String,
+  ctx: String,
+  expr: String,
+): String {
+  val kotlinArrayType = arrayKtType.substringAfterLast(".")
+  val elementType = PRIMITIVE_ARRAY_ELEMENT_TYPE[arrayKtType]!!
+  val elemConv = when (elementType) {
+    "kotlin.Int" -> "HermesBridge_getValueDouble(ctx, elemRef).toInt()"
+    "kotlin.Boolean" -> "HermesBridge_getValueBool(ctx, elemRef) != 0"
+    "kotlin.Double" -> "HermesBridge_getValueDouble(ctx, elemRef)"
+    "kotlin.Float" -> "HermesBridge_getValueDouble(ctx, elemRef).toFloat()"
+    "kotlin.Char" -> "HermesBridge_getValueDouble(ctx, elemRef).toInt().toChar()"
+    "kotlin.Short" -> "HermesBridge_getValueDouble(ctx, elemRef).toInt().toShort()"
+    "kotlin.Byte" -> "HermesBridge_getValueDouble(ctx, elemRef).toInt().toByte()"
+    "kotlin.Long" -> "JsNumberToLong(ctx, elemRef)"
+    else -> error("unexpected primitive array element: $elementType")
+  }
+  helpers.appendLine("private fun $name(ctx: COpaquePointer?, jsArrHandle: Int): $kotlinArrayType = run {")
+  helpers.appendLine("    val len = HermesBridge_getArrayLength(ctx, jsArrHandle)")
+  helpers.appendLine("    val result = $kotlinArrayType(len)")
+  helpers.appendLine("    var i = 0")
+  helpers.appendLine("    while (i < len) {")
+  helpers.appendLine("        val elemRef = HermesBridge_createArrayElementHandle(ctx, jsArrHandle, i)")
+  helpers.appendLine("        result[i] = $elemConv")
+  helpers.appendLine("        HermesBridge_freeHandle(ctx, elemRef)")
+  helpers.appendLine("        i++")
+  helpers.appendLine("    }")
+  helpers.appendLine("    result")
+  helpers.appendLine("}")
+  helpers.appendLine()
+  return "$name(ctx, $expr)"
+}
+
+/**
+ * Emits the expression converting a JS value (via a handle in [expr]) of [type] into Kotlin.
+ * Simple types convert inline; objects use bridge dispatch; inline value classes are wrapped;
+ * collections recurse into helper functions emitted to [helpers].
+ */
+private fun emitElementConversion(
+  helpers: StringBuilder,
+  name: String,
+  type: IrType?,
+  ctx: String,
+  expr: String,
+): String {
+  val ktType = effectiveClassFqn(type)
+  val elemClass = (type as? IrSimpleType)?.getClass()
+  val isInlineElem = elemClass != null && isInlineClass(elemClass)
+  val underlying = if (isInlineElem) unwrapInlineUnderlying(elemClass) else null
+
+  return when {
+    ktType == "kotlin.String" -> "HermesBridge_getValueString(ctx, $expr)?.let { s -> s.toKStringFromUtf8()?.also { platform.posix.free(s) } } ?: \"\""
+    isInlineElem && underlying == "kotlin.Int" -> "${ktType.substringAfterLast(".")}(HermesBridge_getValueDouble(ctx, $expr).toInt())"
+    isInlineElem && underlying == "kotlin.Double" -> "${ktType.substringAfterLast(".")}(HermesBridge_getValueDouble(ctx, $expr))"
+    isInlineElem && underlying == "kotlin.Long" -> "${ktType.substringAfterLast(".")}(JsNumberToLong(ctx, $expr))"
+    isInlineElem && underlying == "kotlin.Float" -> "${ktType.substringAfterLast(".")}(HermesBridge_getValueDouble(ctx, $expr).toFloat())"
+    ktType == "kotlin.Int" -> "HermesBridge_getValueDouble(ctx, $expr).toInt()"
+    ktType == "kotlin.Long" -> "JsNumberToLong(ctx, $expr)"
+    ktType == "kotlin.Float" -> "HermesBridge_getValueDouble(ctx, $expr).toFloat()"
+    ktType == "kotlin.Double" -> "HermesBridge_getValueDouble(ctx, $expr)"
+    ktType == "kotlin.Boolean" -> "(HermesBridge_getValueBool(ctx, $expr) != 0)"
+    ktType == "kotlin.Any" -> "bridgeForAny(ctx, $expr) as Any"
+    ktType == "kotlin.collections.List" -> emitListHelper(helpers, name, typeArgument(type, 0), ctx, expr)
+    ktType == "kotlin.Array" -> emitArrayHelper(helpers, name, typeArgument(type, 0), ctx, expr)
+    ktType in MAP_KOTLIN_TYPES -> emitMapHelper(helpers, name, type, ctx, expr)
+    ktType in PRIMITIVE_ARRAY_ELEMENT_TYPE -> emitPrimitiveArrayHelper(helpers, name, ktType, ctx, expr)
+    else -> {
+      // Object element: use bridge dispatch.
+      val typeName = ktType.substringAfterLast(".")
+      val isNullableElem = (type as? IrSimpleType)?.isMarkedNullable() ?: false
+      if (isNullableElem) {
+        "(HermesBridge_getBridgeDispatch(ctx, $expr).toCPointer<CFunction<(COpaquePointer?, Int) -> COpaquePointer?>>()!!.invoke(ctx, $expr)?.asStableRef<Any>()?.get() as? $typeName)"
+      } else {
+        "(HermesBridge_getBridgeDispatch(ctx, $expr).toCPointer<CFunction<(COpaquePointer?, Int) -> COpaquePointer?>>()!!.invoke(ctx, $expr)!!.asStableRef<Any>().get() as $typeName)"
+      }
+    }
+  }
 }
 
 /** Generate per-class native bridge files. Each file self-registers via @EagerInitialization. */

@@ -72,7 +72,7 @@ expect class JsEngine : AutoCloseable {
    * on Kotlin/Native [evaluate] returns null for plain objects, so this runs the result
    * through `bridgeForAny` instead.
    *
-   * @throws QuickJsException if there is an error evaluating the script.
+   * @throws JsException if there is an error evaluating the script.
    */
   fun evaluateForBridge(script: String, fileName: String): Any?
 

@@ -7,9 +7,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <cmath>
 
 #include <string>
 #include <vector>
+#include <mutex>
 
 #include <jsi/jsi.h>
 
@@ -59,6 +61,43 @@ void HermesContext_setOutboundChannelCallbacks(void* context,
 void HermesContext_setRdmaChangeSink(void* context, RdmaChangeSinkFn sinkFn) {
     if (!context) return;
     asNativeContext(context)->rdmaSinkFn = sinkFn;
+}
+
+void HermesContext_setRdmaCreateCallback(void* context, void* fn) {
+    if (!context) return;
+    asNativeContext(context)->createCb = reinterpret_cast<RdmaCreateFn>(fn);
+}
+void HermesContext_setRdmaPropertyChangeCallback(void* context, void* fn) {
+    if (!context) return;
+    asNativeContext(context)->propertyChangeCb = reinterpret_cast<RdmaPropertyChangeFn>(fn);
+}
+void HermesContext_setRdmaModifierChangeCallback(void* context, void* fn) {
+    if (!context) return;
+    asNativeContext(context)->modifierChangeCb = reinterpret_cast<RdmaModifierChangeFn>(fn);
+}
+void HermesContext_setRdmaAddCallback(void* context, void* fn) {
+    if (!context) return;
+    asNativeContext(context)->addCb = reinterpret_cast<RdmaAddFn>(fn);
+}
+void HermesContext_setRdmaRemoveCallback(void* context, void* fn) {
+    if (!context) return;
+    asNativeContext(context)->removeCb = reinterpret_cast<RdmaRemoveFn>(fn);
+}
+void HermesContext_setRdmaMoveCallback(void* context, void* fn) {
+    if (!context) return;
+    asNativeContext(context)->moveCb = reinterpret_cast<RdmaMoveFn>(fn);
+}
+void HermesContext_setRdmaBridgeChangeCallback(void* context, void* fn) {
+    if (!context) return;
+    asNativeContext(context)->bridgeChangeCb = reinterpret_cast<RdmaBridgeChangeFn>(fn);
+}
+void HermesContext_setRdmaSetRemoveDetachCallback(void* context, void* fn) {
+    if (!context) return;
+    asNativeContext(context)->setRemoveDetachCb = reinterpret_cast<RdmaSetRemoveDetachFn>(fn);
+}
+void HermesContext_setRdmaSendChangesCallback(void* context, void* fn) {
+    if (!context) return;
+    asNativeContext(context)->sendChangesCb = reinterpret_cast<RdmaSendChangesFn>(fn);
 }
 
 int HermesFramework_init(void** runtimeOut) {
@@ -226,6 +265,41 @@ HermesTaggedValue HermesContext_execute(void* context, const uint8_t* bytecode, 
     }
 }
 
+int HermesContext_executeToHandle(void* context, const uint8_t* bytecode, int bytecodeSize,
+                                  const char* sourceURL) {
+    if (!context || !bytecode) {
+        snprintf(g_lastError, sizeof(g_lastError), "Invalid parameters");
+        return -1;
+    }
+
+    ContextNative* ctx = asNativeContext(context);
+    if (!ctx->runtime) {
+        snprintf(g_lastError, sizeof(g_lastError), "Invalid runtime");
+        return -1;
+    }
+
+    try {
+        jsi::Value result = HermesCore_evaluateBytecode(
+            ctx, bytecode, bytecodeSize, sourceURL ? sourceURL : "zipline-module.js");
+        // Handle 0 is reserved as "global object" in HermesBridge_createHandle, so
+        // the first real handle must start at 1.
+        if (ctx->bridgeHandles.empty()) {
+            ctx->bridgeHandles.push_back(std::make_shared<jsi::Value>(jsi::Value::undefined()));
+        }
+        int handle = static_cast<int>(ctx->bridgeHandles.size());
+        ctx->bridgeHandles.push_back(std::make_shared<jsi::Value>(*ctx->runtime, result));
+        return handle;
+    } catch (const jsi::JSError& e) {
+        ctx->lastError = e.getMessage() + std::string("\n") + e.getStack();
+        snprintf(g_lastError, sizeof(g_lastError), "%s", e.getMessage().c_str());
+        return -1;
+    } catch (const std::exception& e) {
+        ctx->lastError = e.what();
+        snprintf(g_lastError, sizeof(g_lastError), "%s", e.what());
+        return -1;
+    }
+}
+
 int HermesContext_getGlobalProperty(void* context, const char* name, char** valueOut) {
     if (!context || !name) {
         snprintf(g_lastError, sizeof(g_lastError), "Invalid parameters");
@@ -346,173 +420,163 @@ int HermesContext_initRdmaChangesChannel(void* context) {
 
     jsi::Object rdmaObj(rt);
 
-    jsi::Function appendCreateFn = jsi::Function::createFromHostFunction(
+    auto appendCreateFn = jsi::Function::createFromHostFunction(
         rt, jsi::PropNameID::forUtf8(rt, "appendCreate"), 2,
-        [context](jsi::Runtime& runtime, const jsi::Value& thisVal,
+        [context](jsi::Runtime& runtime, const jsi::Value&,
            const jsi::Value* args, size_t count) -> jsi::Value {
             if (count < 2 || !args[0].isNumber() || !args[1].isNumber()) {
                 throw jsi::JSError(runtime, "appendCreate expects (id, tag)");
             }
             ContextNative* ctx = asNativeContext(context);
-            RdmaChange ch;
-            ch.type = RdmaChangeType::Create;
-            ch.id = static_cast<int>(args[0].asNumber());
-            ch.field1 = static_cast<int>(args[1].asNumber());
-            ch.jsValue = nullptr;
-            ctx->pendingChanges.push_back(std::move(ch));
+            if (ctx->createCb) {
+                ctx->createCb(context, static_cast<int>(args[0].asNumber()),
+                              static_cast<int>(args[1].asNumber()));
+            }
             return jsi::Value::undefined();
         });
     rdmaObj.setProperty(rt, "appendCreate", appendCreateFn);
 
-    jsi::Function appendPropertyChangeFn = jsi::Function::createFromHostFunction(
+    auto appendPropertyChangeFn = jsi::Function::createFromHostFunction(
         rt, jsi::PropNameID::forUtf8(rt, "appendPropertyChange"), 4,
-        [context](jsi::Runtime& runtime, const jsi::Value& thisVal,
+        [context](jsi::Runtime& runtime, const jsi::Value&,
            const jsi::Value* args, size_t count) -> jsi::Value {
             if (count < 4 || !args[0].isNumber() || !args[1].isNumber() || !args[2].isNumber()) {
                 throw jsi::JSError(runtime, "appendPropertyChange expects (id, widgetTag, propertyTag, value)");
             }
             ContextNative* ctx = asNativeContext(context);
-            RdmaChange ch;
-            ch.type = RdmaChangeType::PropertyChange;
-            ch.id = static_cast<int>(args[0].asNumber());
-            ch.field1 = static_cast<int>(args[1].asNumber());
-            ch.field2 = static_cast<int>(args[2].asNumber());
-            ch.jsValue = std::make_shared<jsi::Value>(runtime, args[3]);
-            ctx->pendingChanges.push_back(std::move(ch));
+            if (!ctx->propertyChangeCb) return jsi::Value::undefined();
+            int handle = static_cast<int>(ctx->bridgeHandles.size());
+            ctx->bridgeHandles.push_back(std::make_shared<jsi::Value>(runtime, args[3]));
+            ctx->propertyChangeCb(context,
+                static_cast<int>(args[0].asNumber()),
+                static_cast<int>(args[1].asNumber()),
+                static_cast<int>(args[2].asNumber()),
+                 handle);
             return jsi::Value::undefined();
         });
     rdmaObj.setProperty(rt, "appendPropertyChange", appendPropertyChangeFn);
 
-    jsi::Function appendModifierChangeFn = jsi::Function::createFromHostFunction(
+    auto appendModifierChangeFn = jsi::Function::createFromHostFunction(
         rt, jsi::PropNameID::forUtf8(rt, "appendModifierChange"), 2,
-        [context](jsi::Runtime& runtime, const jsi::Value& thisVal,
+        [context](jsi::Runtime& runtime, const jsi::Value&,
            const jsi::Value* args, size_t count) -> jsi::Value {
             if (count < 2 || !args[0].isNumber() || !args[1].isObject()) {
                 throw jsi::JSError(runtime, "appendModifierChange expects (id, elements)");
             }
             ContextNative* ctx = asNativeContext(context);
-            RdmaChange ch;
-            ch.type = RdmaChangeType::ModifierChange;
-            ch.id = static_cast<int>(args[0].asNumber());
-            ch.jsValue = std::make_shared<jsi::Value>(runtime, args[1]);
-            ctx->pendingChanges.push_back(std::move(ch));
+            if (!ctx->modifierChangeCb) return jsi::Value::undefined();
+            int handle = static_cast<int>(ctx->bridgeHandles.size());
+            ctx->bridgeHandles.push_back(std::make_shared<jsi::Value>(runtime, args[1]));
+            ctx->modifierChangeCb(context, static_cast<int>(args[0].asNumber()), handle);
             return jsi::Value::undefined();
         });
     rdmaObj.setProperty(rt, "appendModifierChange", appendModifierChangeFn);
 
-    jsi::Function appendAddFn = jsi::Function::createFromHostFunction(
+    auto appendAddFn = jsi::Function::createFromHostFunction(
         rt, jsi::PropNameID::forUtf8(rt, "appendAdd"), 4,
-        [context](jsi::Runtime& runtime, const jsi::Value& thisVal,
+        [context](jsi::Runtime& runtime, const jsi::Value&,
            const jsi::Value* args, size_t count) -> jsi::Value {
             if (count < 4 || !args[0].isNumber() || !args[1].isNumber() || !args[2].isNumber() || !args[3].isNumber()) {
                 throw jsi::JSError(runtime, "appendAdd expects (id, childrenTag, childId, index)");
             }
             ContextNative* ctx = asNativeContext(context);
-            RdmaChange ch;
-            ch.type = RdmaChangeType::Add;
-            ch.id = static_cast<int>(args[0].asNumber());
-            ch.field1 = static_cast<int>(args[1].asNumber());
-            ch.field2 = static_cast<int>(args[2].asNumber());
-            ch.field3 = static_cast<int>(args[3].asNumber());
-            ch.jsValue = nullptr;
-            ctx->pendingChanges.push_back(std::move(ch));
+            if (ctx->addCb) {
+                ctx->addCb(context,
+                    static_cast<int>(args[0].asNumber()),
+                    static_cast<int>(args[1].asNumber()),
+                    static_cast<int>(args[2].asNumber()),
+                     static_cast<int>(args[3].asNumber()));
+            }
             return jsi::Value::undefined();
         });
     rdmaObj.setProperty(rt, "appendAdd", appendAddFn);
 
-    jsi::Function appendRemoveFn = jsi::Function::createFromHostFunction(
+    auto appendRemoveFn = jsi::Function::createFromHostFunction(
         rt, jsi::PropNameID::forUtf8(rt, "appendRemove"), 3,
-        [context](jsi::Runtime& runtime, const jsi::Value& thisVal,
+        [context](jsi::Runtime& runtime, const jsi::Value&,
            const jsi::Value* args, size_t count) -> jsi::Value {
             if (count < 3 || !args[0].isNumber() || !args[1].isNumber() || !args[2].isNumber()) {
                 throw jsi::JSError(runtime, "appendRemove expects (id, childrenTag, index)");
             }
             ContextNative* ctx = asNativeContext(context);
-            RdmaChange ch;
-            ch.type = RdmaChangeType::Remove;
-            ch.id = static_cast<int>(args[0].asNumber());
-            ch.field1 = static_cast<int>(args[1].asNumber());
-            ch.field2 = static_cast<int>(args[2].asNumber());
-            ch.detach = false;
-            ch.jsValue = nullptr;
-            ctx->pendingChanges.push_back(std::move(ch));
-            // The counter tracks removes only (matching the original Kotlin
-            // protocol): each remove gets an ordinal that the JS side passes
-            // back to setRemoveDetach().
-            int removeOrdinal = ctx->removeCounter++;
-            return jsi::Value(removeOrdinal);
+            int id = static_cast<int>(args[0].asNumber());
+            int ct = static_cast<int>(args[1].asNumber());
+            int idx = static_cast<int>(args[2].asNumber());
+            if (ctx->removeCb) {
+                ctx->removeCb(context, id, ct, idx, 0);
+            }
+            return jsi::Value(ctx->removeCounter++);
         });
     rdmaObj.setProperty(rt, "appendRemove", appendRemoveFn);
 
-    jsi::Function setRemoveDetachFn = jsi::Function::createFromHostFunction(
+    auto setRemoveDetachFn = jsi::Function::createFromHostFunction(
         rt, jsi::PropNameID::forUtf8(rt, "setRemoveDetach"), 1,
-        [context](jsi::Runtime& runtime, const jsi::Value& thisVal,
+        [context](jsi::Runtime& runtime, const jsi::Value&,
            const jsi::Value* args, size_t count) -> jsi::Value {
             if (count < 1 || !args[0].isNumber()) {
                 throw jsi::JSError(runtime, "setRemoveDetach expects (idx)");
             }
             ContextNative* ctx = asNativeContext(context);
-            // idx is the remove ordinal returned by appendRemove(), not an
-            // index into pendingChanges: find the idx-th Remove change.
-            int idx = static_cast<int>(args[0].asNumber());
-            int removeOrdinal = 0;
-            for (RdmaChange& ch : ctx->pendingChanges) {
-                if (ch.type != RdmaChangeType::Remove) continue;
-                if (removeOrdinal == idx) {
-                    ch.detach = true;
-                    break;
-                }
-                removeOrdinal++;
+            if (ctx->setRemoveDetachCb) {
+                ctx->setRemoveDetachCb(context, static_cast<int>(args[0].asNumber()));
             }
             return jsi::Value::undefined();
         });
     rdmaObj.setProperty(rt, "setRemoveDetach", setRemoveDetachFn);
 
-    jsi::Function appendMoveFn = jsi::Function::createFromHostFunction(
+    auto appendMoveFn = jsi::Function::createFromHostFunction(
         rt, jsi::PropNameID::forUtf8(rt, "appendMove"), 5,
-        [context](jsi::Runtime& runtime, const jsi::Value& thisVal,
+        [context](jsi::Runtime& runtime, const jsi::Value&,
            const jsi::Value* args, size_t count) -> jsi::Value {
             if (count < 5 || !args[0].isNumber() || !args[1].isNumber() || !args[2].isNumber() || !args[3].isNumber() || !args[4].isNumber()) {
                 throw jsi::JSError(runtime, "appendMove expects (id, childrenTag, fromIndex, toIndex, count)");
             }
             ContextNative* ctx = asNativeContext(context);
-            RdmaChange ch;
-            ch.type = RdmaChangeType::Move;
-            ch.id = static_cast<int>(args[0].asNumber());
-            ch.field1 = static_cast<int>(args[1].asNumber());
-            ch.field2 = static_cast<int>(args[2].asNumber());
-            ch.field3 = static_cast<int>(args[3].asNumber());
-            ch.count = static_cast<int>(args[4].asNumber());
-            ch.jsValue = nullptr;
-            ctx->pendingChanges.push_back(std::move(ch));
+            if (ctx->moveCb) {
+                ctx->moveCb(context,
+                    static_cast<int>(args[0].asNumber()),
+                    static_cast<int>(args[1].asNumber()),
+                    static_cast<int>(args[2].asNumber()),
+                    static_cast<int>(args[3].asNumber()),
+                     static_cast<int>(args[4].asNumber()));
+            }
             return jsi::Value::undefined();
         });
     rdmaObj.setProperty(rt, "appendMove", appendMoveFn);
 
-    jsi::Function finishChangesFn = jsi::Function::createFromHostFunction(
-        rt, jsi::PropNameID::forUtf8(rt, "finishChanges"), 0,
-        [context](jsi::Runtime& runtime, const jsi::Value& thisVal,
+    auto appendBridgeChangeFn = jsi::Function::createFromHostFunction(
+        rt, jsi::PropNameID::forUtf8(rt, "appendBridgeChange"), 2,
+        [context](jsi::Runtime& runtime, const jsi::Value&,
            const jsi::Value* args, size_t count) -> jsi::Value {
-            // Flush all pending changes to the Kotlin RDMA sink via the
-            // rdmaChangeSink function pointer. The C++ side manages the
-            // pendingChanges list and removeCounter per context; only the
-            // final sendChanges() call delegates to Kotlin.
-            RdmaChangeSinkFn sinkFn = NULL;
+            if (count < 2 || !args[0].isNumber() || !args[1].isObject()) {
+                return jsi::Value::undefined();
+            }
+            ContextNative* ctx = asNativeContext(context);
+            if (!ctx->bridgeChangeCb) return jsi::Value::undefined();
+            int handle = static_cast<int>(ctx->bridgeHandles.size());
+            ctx->bridgeHandles.push_back(std::make_shared<jsi::Value>(runtime, args[1]));
+            ctx->bridgeChangeCb(context, static_cast<int>(args[0].asNumber()), handle);
+            return jsi::Value::undefined();
+        });
+    rdmaObj.setProperty(rt, "appendBridgeChange", appendBridgeChangeFn);
+
+    auto finishChangesFn = jsi::Function::createFromHostFunction(
+        rt, jsi::PropNameID::forUtf8(rt, "finishChanges"), 0,
+        [context](jsi::Runtime&, const jsi::Value&,
+           const jsi::Value*, size_t) -> jsi::Value {
             ContextNative* ctx = asNativeContext(context);
             ctx->removeCounter = 0;
-            sinkFn = ctx->rdmaSinkFn;
-            if (sinkFn) {
-                sinkFn(context);
+            if (ctx->sendChangesCb) {
+                ctx->sendChangesCb(context);
             }
-            ctx->pendingChanges.clear();
             return jsi::Value::undefined();
         });
     rdmaObj.setProperty(rt, "finishChanges", finishChangesFn);
 
-    jsi::Function changesLengthFn = jsi::Function::createFromHostFunction(
+    auto changesLengthFn = jsi::Function::createFromHostFunction(
         rt, jsi::PropNameID::forUtf8(rt, "changesLength"), 0,
-        [context](jsi::Runtime& runtime, const jsi::Value& thisVal,
-           const jsi::Value* args, size_t count) -> jsi::Value {
+        [context](jsi::Runtime&, const jsi::Value&,
+           const jsi::Value*, size_t) -> jsi::Value {
             return jsi::Value(asNativeContext(context)->removeCounter);
         });
     rdmaObj.setProperty(rt, "changesLength", changesLengthFn);
@@ -666,4 +730,305 @@ char* HermesContext_callInboundDisconnect(void* context, const char* channelName
         return NULL;
     }
     return copyToMalloc(result ? "true" : "false");
+}
+
+// -- Bridge Handle Management (for Kotlin/Native generated bridge code) --
+// Tag constants are defined as #defines in hermes-ios.h (BRIDGE_TAG_*).
+
+int HermesBridge_createHandle(void* context, int parentHandle, const char* name) {
+    ContextNative* ctx = asNativeContext(context);
+    if (!ctx || !ctx->runtime) return 0;
+    jsi::Runtime& rt = *ctx->runtime;
+
+    // Allocate new handle
+    int handle = static_cast<int>(ctx->bridgeHandles.size());
+
+    if (parentHandle == 0) {
+        // 0 = no parent, create from global object
+        auto val = std::make_shared<jsi::Value>(rt.global().getProperty(rt, name));
+        ctx->bridgeHandles.push_back(val);
+    } else if (parentHandle >= 0 && static_cast<size_t>(parentHandle) < ctx->bridgeHandles.size()) {
+        auto& parent = ctx->bridgeHandles[parentHandle];
+        if (parent->isObject()) {
+            auto val = std::make_shared<jsi::Value>(
+                parent->asObject(rt).getProperty(rt, name));
+            ctx->bridgeHandles.push_back(val);
+        } else {
+            return 0;
+        }
+    } else {
+        return 0;
+    }
+    return handle;
+}
+
+int HermesBridge_createArrayElementHandle(void* context, int arrayHandle, int index) {
+    ContextNative* ctx = asNativeContext(context);
+    if (!ctx || !ctx->runtime) return 0;
+    if (arrayHandle < 0 || static_cast<size_t>(arrayHandle) >= ctx->bridgeHandles.size()) return 0;
+
+    jsi::Runtime& rt = *ctx->runtime;
+    auto& val = ctx->bridgeHandles[arrayHandle];
+    if (!val->isObject()) return 0;
+    jsi::Object obj = val->asObject(rt);
+
+    // Use getProperty by index so both plain JS arrays and Kotlin/JS typed
+    // arrays (Int32Array, Float64Array, ...) are supported.
+    jsi::Value elem = obj.getProperty(rt, std::to_string(index).c_str());
+    int handle = static_cast<int>(ctx->bridgeHandles.size());
+    ctx->bridgeHandles.push_back(std::make_shared<jsi::Value>(rt, elem));
+    return handle;
+}
+
+int HermesBridge_getArrayLength(void* context, int handle) {
+    ContextNative* ctx = asNativeContext(context);
+    if (!ctx || !ctx->runtime) return -1;
+    if (handle < 0 || static_cast<size_t>(handle) >= ctx->bridgeHandles.size()) return -1;
+
+    jsi::Runtime& rt = *ctx->runtime;
+    auto& val = ctx->bridgeHandles[handle];
+    if (!val->isObject()) return -1;
+    jsi::Object obj = val->asObject(rt);
+
+    jsi::Value lenVal = obj.getProperty(rt, "length");
+    if (!lenVal.isNumber()) return -1;
+    return static_cast<int>(lenVal.asNumber());
+}
+
+int HermesBridge_getValueTag(void* context, int handle) {
+    ContextNative* ctx = asNativeContext(context);
+    if (!ctx || !ctx->runtime) return BRIDGE_TAG_UNDEFINED;
+    if (handle < 0 || static_cast<size_t>(handle) >= ctx->bridgeHandles.size()) return BRIDGE_TAG_UNDEFINED;
+
+    auto& val = ctx->bridgeHandles[handle];
+    jsi::Runtime& rt = *ctx->runtime;
+
+    if (val->isNull())    return BRIDGE_TAG_NULL;
+    if (val->isUndefined()) return BRIDGE_TAG_UNDEFINED;
+    if (val->isBool())   return BRIDGE_TAG_BOOL;
+
+    if (val->isNumber()) {
+        double d = val->asNumber();
+        if (std::trunc(d) == d && d >= -2147483648.0 && d <= 2147483647.0)
+            return BRIDGE_TAG_INT;
+        return BRIDGE_TAG_DOUBLE;
+    }
+
+    if (val->isString()) return BRIDGE_TAG_STRING;
+
+    if (val->isObject()) {
+        jsi::Object obj = val->asObject(rt);
+        if (obj.isArray(rt)) return BRIDGE_TAG_ARRAY;
+        return BRIDGE_TAG_OBJECT;
+    }
+
+    return BRIDGE_TAG_UNDEFINED;
+}
+
+double HermesBridge_getValueDouble(void* context, int handle) {
+    ContextNative* ctx = asNativeContext(context);
+    if (!ctx || handle < 0 || static_cast<size_t>(handle) >= ctx->bridgeHandles.size()) return 0.0;
+    auto& val = ctx->bridgeHandles[handle];
+    return val->isNumber() ? val->asNumber() : 0.0;
+}
+
+int HermesBridge_getValueBool(void* context, int handle) {
+    ContextNative* ctx = asNativeContext(context);
+    if (!ctx || handle < 0 || static_cast<size_t>(handle) >= ctx->bridgeHandles.size()) return 0;
+    auto& val = ctx->bridgeHandles[handle];
+    return val->isBool() ? (val->asBool() ? 1 : 0) : 0;
+}
+
+char* HermesBridge_getValueString(void* context, int handle) {
+    ContextNative* ctx = asNativeContext(context);
+    if (!ctx || !ctx->runtime) return NULL;
+    if (handle < 0 || static_cast<size_t>(handle) >= ctx->bridgeHandles.size()) return NULL;
+
+    jsi::Runtime& rt = *ctx->runtime;
+    auto& val = ctx->bridgeHandles[handle];
+    if (!val->isString()) return NULL;
+
+    std::string s = val->asString(rt).utf8(rt);
+    return strdup(s.c_str());  // caller frees with free()
+}
+
+void HermesBridge_freeHandle(void* context, int handle) {
+    ContextNative* ctx = asNativeContext(context);
+    if (!ctx) return;
+    if (handle >= 0 && static_cast<size_t>(handle) < ctx->bridgeHandles.size()) {
+        ctx->bridgeHandles[handle].reset();
+    }
+}
+
+int HermesBridge_getObjectPropertyNames(void* context, int objectHandle) {
+    ContextNative* ctx = asNativeContext(context);
+    if (!ctx || !ctx->runtime) return 0;
+    if (objectHandle < 0 || static_cast<size_t>(objectHandle) >= ctx->bridgeHandles.size()) return 0;
+
+    jsi::Runtime& rt = *ctx->runtime;
+    auto& val = ctx->bridgeHandles[objectHandle];
+    if (!val->isObject()) return 0;
+    jsi::Object obj = val->asObject(rt);
+    if (obj.isArray(rt)) return 0;
+
+    jsi::Array names = obj.getPropertyNames(rt);
+    int handle = static_cast<int>(ctx->bridgeHandles.size());
+    ctx->bridgeHandles.push_back(std::make_shared<jsi::Value>(rt, names));
+    return handle;
+}
+
+static jsi::Value bridgeFindMethod(jsi::Runtime& rt, const jsi::Value& obj, const char* prefix) {
+    if (!obj.isObject()) return jsi::Value::undefined();
+    jsi::Object o = obj.asObject(rt);
+    jsi::Value ctor = o.getProperty(rt, "constructor");
+    if (!ctor.isObject()) return jsi::Value::undefined();
+    jsi::Value proto = ctor.asObject(rt).getProperty(rt, "prototype");
+    while (proto.isObject()) {
+        jsi::Array names = proto.asObject(rt).getPropertyNames(rt);
+        size_t n = names.length(rt);
+        for (size_t i = 0; i < n; i++) {
+            jsi::Value nm = names.getValueAtIndex(rt, i);
+            if (!nm.isString()) continue;
+            std::string name = nm.asString(rt).utf8(rt);
+            if (strncmp(name.c_str(), prefix, strlen(prefix)) == 0) {
+                jsi::Value fn = o.getProperty(rt, name.c_str());
+                if (fn.isObject() && fn.asObject(rt).isFunction(rt)) {
+                    return fn;
+                }
+            }
+        }
+        proto = proto.asObject(rt).getProperty(rt, "__proto__");
+    }
+    return jsi::Value::undefined();
+}
+
+int HermesBridge_getMapEntries(void* context, int mapHandle, int* keysHandleOut, int* valuesHandleOut) {
+    ContextNative* ctx = asNativeContext(context);
+    if (!ctx || !ctx->runtime || !keysHandleOut || !valuesHandleOut) return 0;
+    if (mapHandle < 0 || static_cast<size_t>(mapHandle) >= ctx->bridgeHandles.size()) return 0;
+
+    jsi::Runtime& rt = *ctx->runtime;
+    auto& val = ctx->bridgeHandles[mapHandle];
+    if (!val || !val->isObject()) return 0;
+
+    jsi::Object map = val->asObject(rt);
+
+    try {
+        // Kotlin/JS HashMap exposes its backing hash table via `internalMap`
+        // (mangled get_internalMap_*): keysArray_1, valuesArray_1, presenceArray_1,
+        // length_1. Iterate occupied slots (presence == 1).
+        jsi::Value internalMapFn = bridgeFindMethod(rt, *val, "get_internalMap");
+        if (internalMapFn.isUndefined()) return 0;
+        jsi::Value internalMap = internalMapFn.asObject(rt).asFunction(rt).callWithThis(rt, map);
+        if (!internalMap.isObject()) return 0;
+        jsi::Object table = internalMap.asObject(rt);
+
+        jsi::Value keysArr = table.getProperty(rt, "keysArray_1");
+        jsi::Value valuesArr = table.getProperty(rt, "valuesArray_1");
+        jsi::Value presenceArr = table.getProperty(rt, "presenceArray_1");
+        jsi::Value lengthVal = table.getProperty(rt, "length_1");
+        if (!keysArr.isObject() || !valuesArr.isObject() || !presenceArr.isObject() || !lengthVal.isNumber()) {
+            return 0;
+        }
+        int length = static_cast<int>(lengthVal.asNumber());
+
+        std::vector<jsi::Value> keyVec;
+        std::vector<jsi::Value> valueVec;
+        keyVec.reserve(length);
+        valueVec.reserve(length);
+        for (int i = 0; i < length; i++) {
+            jsi::Value presence = presenceArr.asObject(rt).getProperty(rt, std::to_string(i).c_str());
+            if (!presence.isNumber() || presence.asNumber() != 1.0) continue;
+            keyVec.emplace_back(keysArr.asObject(rt).getProperty(rt, std::to_string(i).c_str()));
+            valueVec.emplace_back(valuesArr.asObject(rt).getProperty(rt, std::to_string(i).c_str()));
+        }
+
+        jsi::Array keys = jsi::Array(rt, keyVec.size());
+        jsi::Array values = jsi::Array(rt, valueVec.size());
+        for (size_t i = 0; i < keyVec.size(); i++) {
+            keys.setValueAtIndex(rt, i, keyVec[i]);
+            values.setValueAtIndex(rt, i, valueVec[i]);
+        }
+
+        int keysHandle = static_cast<int>(ctx->bridgeHandles.size());
+        ctx->bridgeHandles.push_back(std::make_shared<jsi::Value>(rt, keys));
+        int valuesHandle = static_cast<int>(ctx->bridgeHandles.size());
+        ctx->bridgeHandles.push_back(std::make_shared<jsi::Value>(rt, values));
+        *keysHandleOut = keysHandle;
+        *valuesHandleOut = valuesHandle;
+        return 1;
+    } catch (const jsi::JSError& e) {
+        return 0;
+    }
+}
+
+intptr_t HermesBridge_getBridgeDispatch(void* context, int handle) {
+    ContextNative* ctx = asNativeContext(context);
+    if (!ctx || !ctx->runtime) return 0;
+    if (handle < 0 || static_cast<size_t>(handle) >= ctx->bridgeHandles.size()) return 0;
+
+    jsi::Runtime& rt = *ctx->runtime;
+    auto& val = ctx->bridgeHandles[handle];
+    if (!val->isObject()) return 0;
+
+    jsi::Object obj = val->asObject(rt);
+    jsi::Value lowVal = obj.getProperty(rt, "bridge_dispatch_low");
+    jsi::Value highVal = obj.getProperty(rt, "bridge_dispatch_high");
+    if (lowVal.isUndefined() || highVal.isUndefined()) {
+        return 0;
+    }
+
+    int32_t low = static_cast<int32_t>(lowVal.asNumber());
+    int32_t high = static_cast<int32_t>(highVal.asNumber());
+    intptr_t result = (static_cast<intptr_t>(high) << 32) |
+           static_cast<intptr_t>(static_cast<uint32_t>(low));
+    return result;
+}
+
+void HermesBridge_clearHandles(void* context) {
+    ContextNative* ctx = asNativeContext(context);
+    if (!ctx) return;
+    ctx->bridgeHandles.clear();
+}
+
+// -- Bridge dispatch registration (__bridgeRegister) --
+
+static std::vector<std::pair<std::string, void*>> g_iosBridgeTable;
+static std::mutex g_iosBridgeMutex;
+
+void HermesBridge_addBridgeEntry(const char* fqn, void* fn) {
+    std::lock_guard<std::mutex> lock(g_iosBridgeMutex);
+    g_iosBridgeTable.push_back({fqn, fn});
+}
+
+void HermesBridge_installBridgeRegister(void* jsiRuntime) {
+    if (!jsiRuntime) return;
+    jsi::Runtime& rt = *static_cast<jsi::Runtime*>(jsiRuntime);
+
+    auto bridgeRegisterFn = jsi::Function::createFromHostFunction(
+        rt,
+        jsi::PropNameID::forUtf8(rt, "__bridgeRegister"),
+        2,
+        [](jsi::Runtime& rt, const jsi::Value&, const jsi::Value* args, size_t argc) -> jsi::Value {
+            if (argc < 2) return jsi::Value::undefined();
+            auto fq = args[0].asString(rt).utf8(rt);
+            if (!args[1].isObject()) return jsi::Value::undefined();
+            jsi::Object ctor = args[1].asObject(rt);
+
+            std::lock_guard<std::mutex> lock(g_iosBridgeMutex);
+            for (auto& entry : g_iosBridgeTable) {
+                if (entry.first == fq) {
+                    jsi::Object proto = ctor.getPropertyAsObject(rt, "prototype");
+                    intptr_t ptr = reinterpret_cast<intptr_t>(entry.second);
+                    int32_t low  = static_cast<int32_t>(ptr & 0xFFFFFFFF);
+                    int32_t high = static_cast<int32_t>((ptr >> 32) & 0xFFFFFFFF);
+                    proto.setProperty(rt, "bridge_dispatch_low",  jsi::Value(static_cast<double>(low)));
+                    proto.setProperty(rt, "bridge_dispatch_high", jsi::Value(static_cast<double>(high)));
+                    return jsi::Value::undefined();
+                }
+            }
+            return jsi::Value::undefined();
+        });
+
+    rt.global().setProperty(rt, "__bridgeRegister", std::move(bridgeRegisterFn));
 }

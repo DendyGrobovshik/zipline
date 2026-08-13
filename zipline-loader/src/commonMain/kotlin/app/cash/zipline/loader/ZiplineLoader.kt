@@ -508,6 +508,7 @@ class ZiplineLoader internal constructor(
     initializer: suspend (Zipline) -> Unit,
   ): Zipline {
     val zipline = Zipline.create(dispatcher, serializersModule, eventListener)
+    println("ZIPLINE_LOADER: loadFromManifest running")
     try {
       receive(
         ZiplineLoadReceiver(zipline, eventListener),
@@ -516,6 +517,10 @@ class ZiplineLoader internal constructor(
         eventListener,
         nowEpochMs,
       )
+
+      // Check which module had initBridge called by define.js
+      val diag = zipline.jsEngine.getGlobalProperty("__bridge_init_called")
+      if (diag != null) println("BRIDGE_INIT_CALLED: $diag")
 
       // Run caller lambda to validate and initialize the loaded code to confirm it works.
       val initializerStartValue = eventListener.initializerStart(zipline, applicationName)

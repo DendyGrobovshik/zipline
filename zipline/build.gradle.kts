@@ -367,6 +367,8 @@ val hermesJobs = Runtime.getRuntime().availableProcessors().toString()
 // separately via jsEngineRoot where needed) are excluded.
 val hermesGlueInputFiles: FileTree = fileTree(File(rootProject.projectDir, "zipline/native")) {
   include("*.cpp", "*.h")
+  include("hermes-ios/*.cpp", "hermes-ios/*.h")
+  include("common/*.cpp", "common/*.h")
   exclude("hermes/**", "hermes-jni-build/**", "mimalloc/**", "include/**")
 }
 val hermesCmakeInputFiles: FileTree =

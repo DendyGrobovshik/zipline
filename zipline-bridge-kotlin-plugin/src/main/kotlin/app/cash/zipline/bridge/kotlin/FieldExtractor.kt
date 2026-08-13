@@ -5,12 +5,7 @@ import org.jetbrains.kotlin.ir.declarations.IrConstructor
 import org.jetbrains.kotlin.ir.declarations.IrModuleFragment
 import org.jetbrains.kotlin.ir.declarations.IrParameterKind
 import org.jetbrains.kotlin.ir.declarations.IrProperty
-import org.jetbrains.kotlin.ir.types.IrSimpleType
-import org.jetbrains.kotlin.ir.types.IrTypeProjection
-import org.jetbrains.kotlin.ir.types.IrType
-import org.jetbrains.kotlin.ir.types.classFqName
 import org.jetbrains.kotlin.ir.types.getClass
-import org.jetbrains.kotlin.ir.types.isMarkedNullable
 import org.jetbrains.kotlin.ir.util.classId
 import org.jetbrains.kotlin.ir.util.fqNameWhenAvailable
 import org.jetbrains.kotlin.ir.util.hasAnnotation
@@ -56,10 +51,6 @@ internal fun importForType(fqName: String): String {
   return "import $pkg.$shortName"
 }
 
-/**
- * Generates a single file that retains all bridge functions in the module,
- * preventing the linker from dead-code eliminating them.
- */
 /** Emit C code to extract an array field value. */
 internal fun extractFields(annotatedClass: IrClass, includeValBodyFields: Boolean = false): List<FieldInfo> {
   val primaryConstructor = annotatedClass.declarations
@@ -147,5 +138,3 @@ internal fun isPrimitiveArray(ktType: String): Boolean =
 
 internal fun isStringElement(elementType: String?): Boolean =
   elementType == "kotlin.String"
-
-

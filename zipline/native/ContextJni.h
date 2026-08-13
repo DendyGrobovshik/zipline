@@ -65,6 +65,7 @@ class ContextJni : public ContextBase {
   jclass booleanClass;
   jclass integerClass;
   jclass doubleClass;
+  jclass longClass;
   jclass objectClass;
   jclass stringClass;
   jclass memoryUsageClass;
@@ -73,13 +74,14 @@ class ContextJni : public ContextBase {
   jmethodID booleanValueOf;
   jmethodID integerValueOf;
   jmethodID doubleValueOf;
+  jmethodID longValueOf;
   jmethodID stringGetBytes;
   jmethodID stringConstructor;
   jmethodID jsExceptionConstructor;
 
   // RDMA Changes support
   // The class holding cached JNI references for RDMA bridging.
-  jclass rdmaBridgeClass;
+  jclass rdmaBridgeClass = nullptr;
   jmethodID rdmaBridgeCreateCreate;
   jmethodID rdmaBridgeCreateAdd;
   jmethodID rdmaBridgeCreateRemove;
@@ -87,6 +89,7 @@ class ContextJni : public ContextBase {
   jmethodID rdmaBridgeCreatePropertyChange;
   jmethodID rdmaBridgeCreateModifierChange;
   jmethodID rdmaBridgeCreateModifierElement;
+  jmethodID rdmaBridgeCreateBridgeChange;
   jmethodID rdmaBridgeJsonPrimitiveString;
   jmethodID rdmaBridgeJsonPrimitiveInt;
   jmethodID rdmaBridgeJsonPrimitiveLong;
@@ -106,6 +109,7 @@ class ContextJni : public ContextBase {
   std::vector<RdmaChange> pendingChanges;
 
   void cacheRdmaBridgeMethods(JNIEnv* env);
+  void deleteBridgeRefs(JNIEnv* env);
   jobject jsValueToJsonElement(JNIEnv* env, const jsi::Value& val);
   jobject jsArrayToJsonElement(JNIEnv* env, const jsi::Value& val);
   jobject jsObjectToJsonElement(JNIEnv* env, const jsi::Value& val);

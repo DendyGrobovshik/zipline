@@ -15,6 +15,7 @@ enum class RdmaChangeType {
   Add,
   Remove,
   Move,
+  BridgeChange,
 };
 
 constexpr int RDMA_BATCH_SIZE = 2048;

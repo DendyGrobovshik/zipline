@@ -177,9 +177,19 @@ if(ANDROID)
   if(ANDROID)
     set_target_properties(hermesvmlean PROPERTIES
       LINK_FLAGS "-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384")
+    # Prevent gc-sections from stripping unreferenced bridge registry symbols
+    # that are called from other .so files at runtime.
+    target_link_options(hermesvmlean PRIVATE "-Wl,--undefined=addBridgeEntry")
+    target_link_options(hermesvmlean PRIVATE "-Wl,--undefined=addBridgeInit")
+    target_link_options(hermesvmlean PRIVATE "-Wl,--undefined=init_all")
+    target_link_options(hermesvmlean PRIVATE "-Wl,--undefined=register_all")
     if(NOT HERMESVM_LEAN)
       set_target_properties(hermesvm PROPERTIES
         LINK_FLAGS "-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384")
+      target_link_options(hermesvm PRIVATE "-Wl,--undefined=addBridgeEntry")
+      target_link_options(hermesvm PRIVATE "-Wl,--undefined=addBridgeInit")
+      target_link_options(hermesvm PRIVATE "-Wl,--undefined=init_all")
+      target_link_options(hermesvm PRIVATE "-Wl,--undefined=register_all")
     endif()
   endif()
 

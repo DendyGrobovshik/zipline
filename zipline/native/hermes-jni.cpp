@@ -9,6 +9,9 @@
 #include "JniUtf8.h"
 #include "ExceptionThrowers.h"
 #include "InboundCallChannel.h"
+#include "bridge_dispatch.h"
+
+#include <jsi/jsi.h>
 
 // Android log macros - available to all functions in this file
 #ifdef __ANDROID__
@@ -75,6 +78,20 @@ Java_app_cash_zipline_JsEngine_setOutboundCallChannel(JNIEnv* env, jobject /*thi
     return;
   }
   ctx->setOutboundCallChannel(env, name, callChannel);
+}
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_app_cash_zipline_JsEngine_getJsContext(JNIEnv*, jclass, jlong context_) {
+  return context_;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_app_cash_zipline_JsEngine_bridgeInitAllNative(JNIEnv* env, jclass, jlong jsContext) {
+  ContextJni* ctx = toContext(jsContext);
+  if (!ctx) return;
+  jsi::Runtime& rt = ctx->getRuntime();
+  init_all(env);
+  register_all(rt);
 }
 
 extern "C" JNIEXPORT void JNICALL

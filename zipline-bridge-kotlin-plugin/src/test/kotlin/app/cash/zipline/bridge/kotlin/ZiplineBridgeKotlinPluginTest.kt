@@ -116,8 +116,8 @@ class ZiplineBridgeKotlinPluginTest {
         "Should not cast jsValue from jlong")
 
       // Field extraction from JS object
-      assertTrue(content.contains("JS_GetPropertyStr(ctx, jsObj, \"name\")"))
-      assertTrue(content.contains("JS_GetPropertyStr(ctx, jsObj, \"age\")"))
+      assertTrue(content.contains("JS_GetPropertyStr(ctx, *jsObj, \"name\")"))
+      assertTrue(content.contains("JS_GetPropertyStr(ctx, *jsObj, \"age\")"))
 
       // String field conversion
       assertTrue(content.contains("JS_ToCString"))
@@ -140,8 +140,8 @@ class ZiplineBridgeKotlinPluginTest {
 
       // Field setting
       assertTrue(content.contains("GetFieldID"))
-      assertTrue(content.contains("(*env)->SetObjectField(env, result, _fld_name, java_name)"))
-      assertTrue(content.contains("(*env)->SetIntField(env, result, _fld_age, java_age)"))
+      assertTrue(content.contains("SetObjectField(env, result, field_name, java_name)"))
+      assertTrue(content.contains("SetIntField(env, result, field_age, java_age)"))
 
       // Return
       assertTrue(content.contains("return result;"))
@@ -261,15 +261,15 @@ class ZiplineBridgeKotlinPluginTest {
       val content = cFile.readText()
 
       // Both inherited and own fields are extracted
-      assertTrue(content.contains("JS_GetPropertyStr(ctx, jsObj, \"species\")"),
+      assertTrue(content.contains("JS_GetPropertyStr(ctx, *jsObj, \"species\")"),
         "Should extract inherited 'species' field")
-      assertTrue(content.contains("JS_GetPropertyStr(ctx, jsObj, \"breed\")"),
+      assertTrue(content.contains("JS_GetPropertyStr(ctx, *jsObj, \"breed\")"),
         "Should extract own 'breed' field")
 
       // Both fields are set after construction
-      assertTrue(content.contains("(*env)->SetObjectField(env, result, _fld_species, java_species)"),
+      assertTrue(content.contains("SetObjectField(env, result, field_species, java_species)"),
         "Should set inherited 'species' field")
-      assertTrue(content.contains("(*env)->SetObjectField(env, result, _fld_breed, java_breed)"),
+      assertTrue(content.contains("SetObjectField(env, result, field_breed, java_breed)"),
         "Should set own 'breed' field")
 
       // toJavaObject function targets Dog, not Animal
@@ -316,11 +316,11 @@ class ZiplineBridgeKotlinPluginTest {
       val content = cFile.readText()
 
       // String field still extracted directly
-      assertTrue(content.contains("JS_GetPropertyStr(ctx, jsObj, \"label\")"))
+      assertTrue(content.contains("JS_GetPropertyStr(ctx, *jsObj, \"label\")"))
       assertTrue(content.contains("JS_ToCString"))
 
       // Nested object field uses bridge_dispatch property lookup
-      assertTrue(content.contains("JS_GetPropertyStr(ctx, jsObj, \"child\")"))
+      assertTrue(content.contains("JS_GetPropertyStr(ctx, *jsObj, \"child\")"))
       assertTrue(content.contains("JS_GetPropertyStr(ctx, js_child, \"bridge_dispatch\")"))
 
       // TODO comment for pointer compression future
@@ -328,16 +328,16 @@ class ZiplineBridgeKotlinPluginTest {
 
       // Dispatch pointer read via float64
       assertTrue(content.contains(
-        "BridgeConverterFn disp_child = bridgeConverterFromJSValue(disp_val_child);"))
+        "JniBridgeDispatch *disp_child = (JniBridgeDispatch *)(intptr_t)JS_VALUE_GET_FLOAT64(disp_val_child);"))
 
       // Dispatch call
-      assertTrue(content.contains("disp_child(env, ctx, js_child)"))
+      assertTrue(content.contains("disp_child->toJavaObject(env, ctx, &js_child)"))
 
       // Cleanup
       assertTrue(content.contains("JS_FreeValue(ctx, disp_val_child)"))
 
       // Object field uses SetObjectField with proper descriptor
-      assertTrue(content.contains("(*env)->SetObjectField(env, result, _fld_child, java_child)"))
+      assertTrue(content.contains("SetObjectField(env, result, field_child, java_child)"))
       assertTrue(content.contains("\"Lcom/example/Nested;\""),
         "Should use proper JNI field descriptor for Nested type")
     } finally {
@@ -372,16 +372,19 @@ class ZiplineBridgeKotlinPluginTest {
 
       val content = cFile.readText()
 
+      // JS array check
+      assertTrue(content.contains("JS_IsArray(ctx, js_scores)"))
+
       // Typed JNI array creation
       assertTrue(content.contains("NewIntArray"))
       assertTrue(content.contains("GetIntArrayElements"))
       assertTrue(content.contains("ReleaseIntArrayElements"))
-      assertTrue(content.contains("jintArray arr"))
-      assertTrue(content.contains("jint* elems"))
+      assertTrue(content.contains("jintArray arr_scores"))
+      assertTrue(content.contains("jint *elems_scores"))
 
       // Loop with element extraction
-      assertTrue(content.contains("for (jint i = 0; i < len; i++)"))
-      assertTrue(content.contains("JS_GetPropertyUint32(ctx, jsVal, i)"))
+      assertTrue(content.contains("for (jint i = 0; i < len_js_scores; i++)"))
+      assertTrue(content.contains("JS_GetPropertyUint32(ctx, js_scores, i)"))
       assertTrue(content.contains("JS_VALUE_GET_INT(elem)"))
       assertTrue(content.contains("JS_FreeValue(ctx, elem)"))
 
@@ -419,19 +422,22 @@ class ZiplineBridgeKotlinPluginTest {
 
       val content = cFile.readText()
 
+      // JS array check
+      assertTrue(content.contains("JS_IsArray(ctx, js_names)"))
+
       // String array creation
-      assertTrue(content.contains("FindClass(env, \"java/lang/Object\")"))
-      assertTrue(content.contains("NewObjectArray(env, len, oc, NULL)"))
+      assertTrue(content.contains("FindClass(env, \"java/lang/String\")"))
+      assertTrue(content.contains("NewObjectArray(env, len_js_names, strClass_names, NULL)"))
 
       // String element conversion in loop
-      assertTrue(content.contains("JS_ToCString(ctx, jsVal)"))
-      assertTrue(content.contains("NewStringUTF(env, s)"))
-      assertTrue(content.contains("JS_FreeCString(ctx, s)"))
+      assertTrue(content.contains("JS_ToCString(ctx, elem)"))
+      assertTrue(content.contains("NewStringUTF(env, str)"))
+      assertTrue(content.contains("JS_FreeCString(ctx, str)"))
       assertTrue(content.contains("SetObjectArrayElement"))
       assertTrue(content.contains("DeleteLocalRef"))
 
       // JNI field descriptor for object array
-      assertTrue(content.contains("[Ljava/lang/String;"))
+      assertTrue(content.contains("[Ljava/lang/Object;"))
     } finally {
       outputDir.toFile().deleteRecursively()
     }
@@ -470,11 +476,20 @@ class ZiplineBridgeKotlinPluginTest {
       val content = cFile.readText()
 
       // General array path (since Item is not a known type like String or primitive)
-      assertTrue(content.contains("NewObjectArray(env, len, oc, NULL)"))
+      assertTrue(content.contains("JS_IsArray(ctx, js_items)"))
 
-      // Per-element dispatch through the object converter
-      assertTrue(content.contains("JS_GetPropertyStr(ctx, jsVal, \"bridge_dispatch\")"))
-      assertTrue(content.contains("BridgeConverterFn fn = bridgeConverterFromJSValue(disp)"))
+      // Pre-looked-up boxed classes (general path)
+      assertTrue(content.contains("FindClass(env, \"java/lang/Integer\")"))
+
+      // Per-element runtime dispatch
+      assertTrue(content.contains("JS_VALUE_GET_NORM_TAG(elem)"))
+      assertTrue(content.contains("case JS_TAG_INT:"))
+      assertTrue(content.contains("case JS_TAG_OBJECT:"))
+
+      // bridge_dispatch in the object branch
+      assertTrue(content.contains("JS_GetPropertyStr(ctx, elem, \"bridge_dispatch\")"))
+      assertTrue(content.contains("TODO: when pointer compression lands, use JS_VALUE_GET_INT"))
+      assertTrue(content.contains("JniBridgeDispatch *disp ="))
 
       // NewObjectArray
       assertTrue(content.contains("NewObjectArray"))
@@ -511,16 +526,25 @@ class ZiplineBridgeKotlinPluginTest {
 
       val content = cFile.readText()
 
+      // General array dispatch
+      assertTrue(content.contains("JS_IsArray(ctx, js_values)"))
+
       // All tag branches present
       assertTrue(content.contains("case JS_TAG_INT:"))
       assertTrue(content.contains("case JS_TAG_FLOAT64:"))
       assertTrue(content.contains("case JS_TAG_BOOL:"))
       assertTrue(content.contains("case JS_TAG_STRING:"))
+      assertTrue(content.contains("case JS_TAG_OBJECT:"))
 
+      // Pre-looked-up boxing classes
+      assertTrue(content.contains("cls_values_Int"))
+      assertTrue(content.contains("ctor_values_Int"))
+      assertTrue(content.contains("cls_values_Double"))
+      assertTrue(content.contains("cls_values_Boolean"))
 
       // Object branch uses bridge_dispatch
-      assertTrue(content.contains("JS_GetPropertyStr(ctx, jsVal, \"bridge_dispatch\")"))
-      assertTrue(content.contains("JS_IsUndefined(disp)"))
+      assertTrue(content.contains("JS_GetPropertyStr(ctx, elem, \"bridge_dispatch\")"))
+      assertTrue(content.contains("JS_IsUndefined(disp_val)"))
 
       // Cleanup
       assertTrue(content.contains("DeleteLocalRef"))
@@ -607,14 +631,14 @@ class ZiplineBridgeKotlinPluginTest {
 
       // Pre-lookup of boxed class and constructor
       assertTrue(content.contains("FindClass(env, \"java/lang/Integer\")"))
-      assertTrue(content.contains("GetMethodID(env, _boxed_age, \"<init>\", \"(I)V\")"))
+      assertTrue(content.contains("GetMethodID(env, cls_age, \"<init>\", \"(I)V\")"))
 
       // Null check
       assertTrue(content.contains("JS_IsUndefined(js_age)"))
       assertTrue(content.contains("JS_IsNull(js_age)"))
 
       // Boxing via NewObject
-      assertTrue(content.contains("NewObject(env, _boxed_age, _boxedCtor_age, (jint)JS_VALUE_GET_INT(js_age))"))
+      assertTrue(content.contains("NewObject(env, cls_age, ctor_age, (jint)JS_VALUE_GET_INT(js_age))"))
 
       // Null branch
       assertTrue(content.contains("java_age = NULL;"))
@@ -665,7 +689,7 @@ class ZiplineBridgeKotlinPluginTest {
 
       // bridge_dispatch lookup inside null check
       assertTrue(content.contains("JS_GetPropertyStr(ctx, js_child, \"bridge_dispatch\")"))
-      assertTrue(content.contains("disp_child(env, ctx, js_child)"))
+      assertTrue(content.contains("disp_child->toJavaObject(env, ctx, &js_child)"))
 
       // Null branch
       assertTrue(content.contains("java_child = NULL;"))
@@ -710,6 +734,7 @@ class ZiplineBridgeKotlinPluginTest {
       assertTrue(content.contains("JS_IsNull(js_scores)"))
 
       // Array extraction inside null check
+      assertTrue(content.contains("JS_IsArray(ctx, js_scores)"))
       assertTrue(content.contains("NewIntArray"))
       assertTrue(content.contains("GetIntArrayElements"))
 
@@ -750,13 +775,19 @@ class ZiplineBridgeKotlinPluginTest {
 
       val content = cFile.readText()
 
-      // String conversion
-      assertTrue(content.contains("JS_ToCString(ctx, jsVal)"))
-      assertTrue(content.contains("NewStringUTF(env, s)"))
+      // Per-element null check
+      assertTrue(content.contains("JS_IsUndefined(elem)"))
+      assertTrue(content.contains("JS_IsNull(elem)"))
+
+      // String conversion inside null check
+      assertTrue(content.contains("JS_ToCString(ctx, elem)"))
+      assertTrue(content.contains("NewStringUTF(env, str)"))
 
       // java_elem default is NULL
-      assertTrue(content.contains("jobject r = (*env)->NewStringUTF(env, s);"))
+      assertTrue(content.contains("jobject java_elem = NULL;"))
 
+      // Still uses NewObjectArray and String class
+      assertTrue(content.contains("FindClass(env, \"java/lang/String\")"))
       assertTrue(content.contains("NewObjectArray"))
       assertTrue(content.contains("SetObjectArrayElement"))
       assertTrue(content.contains("DeleteLocalRef"))

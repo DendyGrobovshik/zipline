@@ -48,7 +48,16 @@ kotlin {
     }
   }
 
-  macosArm64()
+  macosArm64 {
+    binaries.all {
+      linkerOpts += listOf(
+        "-L${rootDir}/zipline/build/hermes-jni/macos-arm64",
+        "-lhermesvm",
+        "-lsqlite3",
+        "-rpath", "${rootDir}/zipline/build/hermes-jni/macos-arm64",
+      )
+    }
+  }
 
   applyDefaultHierarchyTemplate()
 
@@ -83,20 +92,13 @@ kotlin {
     val commonTest by getting {
       dependencies {
         implementation(kotlin("test"))
+        implementation(projects.ziplineLoader)
       }
       kotlin.srcDir(generatedGuestDir)
     }
     val jvmTest by getting {
       dependencies {
         implementation(kotlin("test-junit"))
-        // ZiplineFile parsing for the embedded guest container is host-only; the loader
-        // has no JS target, so this dependency must not sit in commonTest.
-        implementation(projects.ziplineLoader)
-      }
-    }
-    val nativeTest by getting {
-      dependencies {
-        implementation(projects.ziplineLoader)
       }
     }
   }
@@ -154,7 +156,6 @@ tasks {
   // Embed the guest bytecode as base64 constants, shared by jvmTest and nativeTest.
   val generateGuestSource = register("generateGuestSource") {
     dependsOn(compileGuestJs)
-    inputs.dir(layout.buildDirectory.dir("zipline-guest"))
     outputs.dir(generatedGuestDir)
     doLast {
       val ziplineDir = layout.buildDirectory.dir("zipline-guest").get().asFile
@@ -191,7 +192,7 @@ tasks {
       val javaHome = resolveJdkHome()
       val jniInclude = if (isMac) "$javaHome/include/darwin" else "$javaHome/include/linux"
       val repoNative = rootProject.projectDir.resolve("zipline/native")
-      val cFiles = bridgeCOutputDir.get().asFile.listFiles { f -> f.extension == "c" }!!
+      val cFiles = bridgeCOutputDir.get().asFile.listFiles { f -> f.extension == "cpp" }!!
         .sortedBy { it.name }
         .map { it.absolutePath }
       val objDir = bridgeObjDir.get().asFile
@@ -199,8 +200,11 @@ tasks {
       workingDir(objDir)
       commandLine(
         listOf(
-          "clang", "-c", "-fPIC", "-std=gnu99",
+          "clang++", "-c", "-fPIC", "-std=c++17",
           "-I$repoNative",
+          "-I$repoNative/hermes/API",
+          "-I$repoNative/hermes/API/jsi",
+          "-I$repoNative/hermes/public",
           "-I$javaHome/include",
           "-I$jniInclude",
         ) + cFiles,
@@ -216,7 +220,7 @@ tasks {
       val objs = bridgeObjDir.get().asFile.listFiles { f -> f.extension == "o" }!!
         .sortedBy { it.name }
         .map { it.absolutePath }
-      val cmd = mutableListOf("clang", "-shared")
+      val cmd = mutableListOf("clang++", "-shared")
       if (isMac) cmd += "-Wl,-undefined,dynamic_lookup"
       cmd += objs
       cmd += "-o"
@@ -228,6 +232,10 @@ tasks {
   named<Test>("jvmTest") {
     dependsOn(linkBridgeSo)
     systemProperty("bridgeTestSoPath", bridgeSoFile.get().asFile.absolutePath)
+  }
+
+  named("macosArm64Test") {
+    dependsOn(":zipline:buildHermesHostMacosArm64")
   }
 
   // commonTest sources include the generated guest bytecode; wire the dependency explicitly

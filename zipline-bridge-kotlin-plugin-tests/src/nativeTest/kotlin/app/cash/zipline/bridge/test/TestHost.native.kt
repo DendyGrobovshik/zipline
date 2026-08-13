@@ -7,7 +7,7 @@
  */
 package app.cash.zipline.bridge.test
 
-import app.cash.zipline.QuickJs
+import app.cash.zipline.JsEngine
 import app.cash.zipline.internal.initModuleLoader
 import app.cash.zipline.internal.loadJsModule
 import kotlin.io.encoding.Base64
@@ -15,21 +15,21 @@ import kotlin.io.encoding.ExperimentalEncodingApi
 
 @OptIn(ExperimentalEncodingApi::class)
 actual class TestHost actual constructor() {
-  private val quickJs = QuickJs.create()
+  private val jsEngine = JsEngine.create()
 
   init {
-    initModuleLoader(quickJs)
+    initModuleLoader(jsEngine)
   }
 
   actual fun loadGuest() {
     for ((id, base64) in GeneratedGuest.modules) {
-      loadJsModule(quickJs, id, decodeGuestModule(base64))
+      loadJsModule(jsEngine, id, decodeGuestModule(base64))
     }
   }
 
-  actual fun evaluateOne(script: String): Any? = quickJs.evaluateForBridge(script, "test.js")
+  actual fun evaluateOne(script: String): Any? = jsEngine.evaluateForBridge(script, "test.js")
 
   actual fun close() {
-    quickJs.close()
+    jsEngine.close()
   }
 }
