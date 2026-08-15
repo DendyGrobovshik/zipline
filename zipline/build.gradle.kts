@@ -461,11 +461,24 @@ val linuxCrossToolchainAvailable: Boolean by lazy {
 
 val hermesLinuxStaticDir = layout.buildDirectory.dir("hermes-linux-static")
 
+fun Task.requireLinuxCrossToolchain() {
+  doFirst {
+    require(linuxCrossToolchainAvailable) {
+      """
+      Linux cross toolchain not found; it is required to build jni/amd64/libhermesvm.so
+      for the zipline jvm jar. Install it and retry:
+        brew install x86_64-unknown-linux-gnu
+      (or provide x86_64-linux-gnu-gcc on PATH, or set the LINUX_SYSROOT env var)
+      """.trimIndent()
+    }
+  }
+}
+
 val buildHermesLinuxStatic: TaskProvider<Exec> =
   tasks.register<Exec>("buildHermesLinuxStatic") {
-    description = "Cross-build static Hermes libs for Linux x86_64 (skipped without cross-toolchain)"
+    description = "Cross-build static Hermes libs for Linux x86_64"
     group = "build"
-    onlyIf { linuxCrossToolchainAvailable }
+    requireLinuxCrossToolchain()
     dependsOn(preBuildHermesHost)
     inputs.dir(jsEngineRoot)
     inputs.file(linuxToolchainFile)
@@ -497,9 +510,9 @@ val buildHermesLinuxStatic: TaskProvider<Exec> =
 
 val buildHermesHostLinuxX64: TaskProvider<Exec> =
   tasks.register<Exec>("buildHermesHostLinuxX64") {
-    description = "Cross-build host libhermesvm.so (Linux x86_64, skipped without cross-toolchain)"
+    description = "Cross-build host libhermesvm.so (Linux x86_64)"
     group = "build"
-    onlyIf { linuxCrossToolchainAvailable }
+    requireLinuxCrossToolchain()
     dependsOn(buildHermesLinuxStatic)
     inputs.files(hermesGlueInputFiles)
     inputs.files(hermesCmakeInputFiles)
@@ -533,6 +546,31 @@ val stageHermesHostDylibs: TaskProvider<Sync> =
     from(buildHermesHostMacosX64) { into("x86_64") }
     from(buildHermesHostLinuxX64) { into("amd64") }
     outputs.dir(projectDir.resolve("src/jvmMain/resources/jni"))
+  }
+
+// Defense in depth for publish: if the staged jni resources are ever incomplete
+// (e.g. deleted, or a staging misconfiguration), fail instead of shipping a jvm
+// jar that breaks consumers
+val verifyHermesHostLibsStaged: TaskProvider<Task> =
+  tasks.register("verifyHermesHostLibsStaged") {
+    description = "Verify all host native libraries are staged into jvmMain resources"
+    group = "verification"
+    dependsOn(stageHermesHostDylibs)
+    outputs.upToDateWhen { false }
+    doLast {
+      val jniDir = projectDir.resolve("src/jvmMain/resources/jni")
+      val expected = mapOf(
+        "aarch64" to "libhermesvm.dylib",
+        "x86_64" to "libhermesvm.dylib",
+        "amd64" to "libhermesvm.so",
+      )
+      val missing = expected.filter { (arch, lib) -> !File(jniDir, "$arch/$lib").isFile }
+      check(missing.isEmpty()) {
+        "Missing staged host native libraries: ${missing.values}. " +
+          "Run ./gradlew :zipline:stageHermesHostDylibs on a machine with the macOS SDK " +
+          "and the Linux cross toolchain (x86_64-linux-gnu-gcc or LINUX_SYSROOT) before publishing."
+      }
+    }
   }
 
 // Build a merged static Hermes+Zipline archive for a single iOS variant.
@@ -675,7 +713,7 @@ tasks.matching { it.name == "jvmJar" || it.name == "jvmProcessResources" }
   .configureEach { dependsOn(stageHermesHostDylibs) }
 
 tasks.matching { it.name == "publishToMavenLocal" || it.name.startsWith("publish") }
-  .configureEach { dependsOn(stageHermesHostDylibs) }
+  .configureEach { dependsOn(verifyHermesHostLibsStaged) }
 
 android {
   namespace = "app.cash.zipline"
