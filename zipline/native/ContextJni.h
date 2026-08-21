@@ -13,9 +13,13 @@
 namespace jsi = facebook::jsi;
 namespace hermes_vm = hermes::vm;
 
+class ContextJni;
+
 class ContextJni : public ContextBase {
  public:
-  explicit ContextJni(JNIEnv* env);
+  // forceEagerCompilation disables lazy compilation so CDP breakpoints bind
+  // in runtime-compiled source (set when the CDP debug server is enabled).
+  explicit ContextJni(JNIEnv* env, bool forceEagerCompilation = false);
   ~ContextJni() override;
 
   jsi::String toJsString(const std::string& str) override;
@@ -25,6 +29,7 @@ class ContextJni : public ContextBase {
 
   // ----- JS / bytecode lifecycle.
   jobject execute(JNIEnv* env, jbyteArray byteCode, jstring fileName);
+  jobject evaluate(JNIEnv* env, jstring source, jstring fileName);
   jbyteArray compile(JNIEnv* env, jstring source, jstring file,
                      jstring sourceMap);
 

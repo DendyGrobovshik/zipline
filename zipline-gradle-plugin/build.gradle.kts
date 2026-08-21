@@ -29,6 +29,7 @@ dependencies {
   implementation(libs.kotlin.gradle.plugin)
   implementation(libs.okHttp.core)
   implementation(libs.okio.core)
+  compileOnly(libs.android.gradle.plugin)
   testImplementation(projects.ziplineLoaderTesting)
   testImplementation(libs.assertk)
   testImplementation(libs.junit)

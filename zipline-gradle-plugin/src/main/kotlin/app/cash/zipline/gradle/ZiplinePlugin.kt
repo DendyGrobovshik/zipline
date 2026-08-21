@@ -17,6 +17,7 @@ package app.cash.zipline.gradle
 
 import app.cash.zipline.gradle.ValidateZiplineApiTask.Mode
 import app.cash.zipline.loader.SignatureAlgorithmId
+import com.android.build.api.variant.AndroidComponentsExtension
 import org.gradle.api.Project
 import org.gradle.api.Task
 import org.gradle.api.UnknownTaskException
@@ -54,14 +55,28 @@ class ZiplinePlugin : KotlinCompilerPluginSupportPlugin {
 
     createGenerateKeyPairTasks(target)
 
-    val kotlinExtension = target.extensions.findByType(KotlinMultiplatformExtension::class.java)
-      ?: return
-
     val ziplineExtension = target.extensions.create("zipline", ZiplineExtension::class.java)
     ziplineExtension.apiTracking.convention(true)
     ziplineExtension.forbidServiceExtension.convention(false)
     ziplineExtension.includeSchemaInFunctionIds.convention(false)
     ziplineExtension.includeApiConstants.convention(false)
+
+    // Default the two DirectoryProperty inputs of ZiplineServeTask to the
+    // project directory and its parent. Tasks that don't override them
+    // (e.g. one-off serve tasks that re-use ZiplineServeTask) get
+    // sensible defaults; sibling-checkout serving still works.
+    val projectDir = target.layout.projectDirectory
+    target.tasks.configureEach {
+      if (it is ZiplineServeTask) {
+        it.sourceRootDir.convention(projectDir)
+        it.siblingRootDir.convention(projectDir.dir(".."))
+      }
+    }
+
+    configureCdpDebugPort(target, ziplineExtension)
+
+    val kotlinExtension = target.extensions.findByType(KotlinMultiplatformExtension::class.java)
+      ?: return
 
     val cliConfiguration: Configuration = target.configurations.create("ziplineCli")
       .apply {
@@ -161,6 +176,43 @@ class ZiplinePlugin : KotlinCompilerPluginSupportPlugin {
     }
   }
 
+  private fun configureCdpDebugPort(
+    project: Project,
+    extension: ZiplineExtension,
+  ) {
+    project.pluginManager.withPlugin("com.android.application") {
+      val port = extension.cdpDebugPort
+      val outputDir = project.objects.directoryProperty()
+        .apply { set(project.layout.buildDirectory.dir("generated/zipline/cdpDebugPort")) }
+      val generateTask = project.tasks.register("generateZiplineCdpDebugPort") { task ->
+        task.inputs.property("cdpDebugPort", port).optional(true)
+        task.outputs.dir(outputDir)
+        task.doLast {
+          // No port configured means no class, i.e. debugging disabled.
+          val dir = outputDir.get().asFile
+          dir.deleteRecursively()
+          val portValue = port.orNull ?: return@doLast
+          val source = dir.resolve("app/cash/zipline/ZiplineCdpConfig.java")
+          source.parentFile.mkdirs()
+          source.writeText(
+            """
+            |package app.cash.zipline;
+            |public final class ZiplineCdpConfig {
+            |  public static final int CDP_DEBUG_PORT = $portValue;
+            |  private ZiplineCdpConfig() {}
+            |}
+            |
+            """.trimMargin(),
+          )
+        }
+      }
+      val androidComponents = project.extensions.getByType(AndroidComponentsExtension::class.java)
+      androidComponents.onVariants { variant ->
+        variant.sources.java?.addGeneratedSourceDirectory(generateTask) { outputDir }
+      }
+    }
+  }
+
   private fun registerCompileZiplineTask(
     project: Project,
     jsProductionTask: JsProductionTask,
@@ -186,6 +238,8 @@ class ZiplinePlugin : KotlinCompilerPluginSupportPlugin {
     project.tasks.register(serveTaskName, ZiplineServeTask::class.java) { createdTask ->
       createdTask.description = "Serves Zipline files"
       createdTask.inputDir.set(ziplineCompileTask.flatMap { it.outputDir })
+      createdTask.sourceRootDir.set(project.rootDir)
+      createdTask.siblingRootDir.set(project.rootDir.parentFile)
       createdTask.port.set(extension.httpServerPort)
     }
 

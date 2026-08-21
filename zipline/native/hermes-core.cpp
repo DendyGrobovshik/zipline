@@ -34,12 +34,30 @@ hermes::vm::RuntimeConfig HermesCore_makeRuntimeConfig() {
       .build();
 }
 
-int HermesCore_initContext(ContextBase* ctx) {
-  auto runtime = facebook::hermes::makeHermesRuntime(HermesCore_makeRuntimeConfig());
+// CDP debugging forces eager compilation: lazily-compiled functions have no
+// code blocks yet, so breakpoints in them cannot bind (the lazy-expansion
+// path in the debugger does not fire for source-compiled modules here).
+hermes::vm::RuntimeConfig HermesCore_makeRuntimeConfig(bool forceEagerCompilation) {
+  auto builder = facebook::hermes::hardenedHermesRuntimeConfig().rebuild();
+  if (forceEagerCompilation) {
+    builder.withCompilationMode(hermes::vm::CompilationMode::ForceEagerCompilation);
+    // CDP frame evaluation (Debugger.evaluateOnCallFrame) parses the eval
+    // expression at runtime; the hardened config disables eval entirely.
+    builder.withEnableEval(true);
+  }
+  return builder
+      .withES6Proxy(true)
+      .withGCConfig(HermesCore_makeGCConfig())
+      .build();
+}
+
+int HermesCore_initContext(ContextBase* ctx, bool forceEagerCompilation) {
+  auto runtime = facebook::hermes::makeHermesRuntime(HermesCore_makeRuntimeConfig(forceEagerCompilation));
   if (!runtime) {
     return 0;
   }
   ctx->runtime = std::move(runtime);
+  ctx->debugCompilation = forceEagerCompilation;
 
   // Install a global `gc()` helper mirroring the QuickJS JS_AddGlobalThisGc
   // shim. Hermes has no built-in JS-visible gc function in the runtime.
@@ -81,6 +99,27 @@ jsi::Value HermesCore_evaluateBytecode(ContextBase* ctx,
   auto buffer = std::make_shared<VecBuffer>(bufPtr);
   auto prepared = ctx->runtime->prepareJavaScript(buffer, sourceURL);
   return ctx->runtime->evaluatePreparedJavaScript(prepared);
+}
+
+jsi::Value HermesCore_evaluateSource(ContextBase* ctx,
+                                     const char* source,
+                                     const std::string& sourceURL) {
+#ifdef HERMESVM_LEAN
+  throw std::runtime_error("evaluate() is not available in lean Hermes build");
+#else
+  class StringBuffer : public jsi::Buffer {
+   public:
+    explicit StringBuffer(std::string s) : s_(std::move(s)) {}
+    size_t size() const override { return s_.size(); }
+    const uint8_t* data() const override {
+      return reinterpret_cast<const uint8_t*>(s_.data());
+    }
+   private:
+    std::string s_;
+  };
+  auto buffer = std::make_shared<StringBuffer>(source ? source : "");
+  return ctx->runtime->evaluateJavaScript(buffer, sourceURL);
+#endif // HERMESVM_LEAN
 }
 
 extern "C" {
@@ -129,6 +168,14 @@ int HermesCore_compile(void* context,
   std::optional<std::string> sourceMapBuf = std::nullopt;
   if (sourceMap) {
     sourceMapBuf = std::string(sourceMap);
+  } else if (ctx->debugCompilation) {
+    // CDP debugging needs full debug info even without a real source map:
+    // hermes::compileJS only sets CompileFlags.debug (and disables the
+    // optimizer, which would break debug info) when a source map is passed.
+    // A placeholder map also lets the parser's sourceMappingURL magic comment
+    // flow into the debug info, so DevTools can fetch the real map itself.
+    sourceMapBuf = std::string(
+        "{\"version\":3,\"sources\":[],\"names\":[],\"mappings\":\"\"}");
   }
 
   std::string bytecode;
@@ -138,10 +185,20 @@ int HermesCore_compile(void* context,
         src,
         fname,
         bytecode,
-        /*optimize=*/true,
-        /*emitAsyncBreakCheck=*/false,
+        // Optimize in production (source-mapped bytecode for stack traces
+        // must not pay for unoptimized code); skip optimization only when
+        // compiling inside a CDP context, where the optimizer's register
+        // passes can break the debug info breakpoints resolve through.
+        /*optimize=*/!ctx->debugCompilation,
+        // Async break checks let the CDP debugger interrupt running JS
+        // (Debugger.pause and other triggerInterrupt_TS users); only CDP
+        // contexts pay for them.
+        /*emitAsyncBreakCheck=*/ctx->debugCompilation,
         /*diagHandler=*/nullptr,
-        sourceMapBuf);
+        sourceMapBuf,
+        // Debug info (line tables, embedded map) only in CDP contexts —
+        // never in production bytecode.
+        /*debug=*/ctx->debugCompilation);
   } catch (const std::exception& e) {
     ctx->lastError = e.what();
     if (errorOut) *errorOut = strdup(e.what());

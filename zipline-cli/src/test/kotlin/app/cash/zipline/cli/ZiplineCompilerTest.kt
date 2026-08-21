@@ -17,6 +17,7 @@
 package app.cash.zipline.cli
 
 import app.cash.zipline.JsEngine
+import app.cash.zipline.Zipline
 import app.cash.zipline.ZiplineManifest
 import app.cash.zipline.loader.CURRENT_ZIPLINE_VERSION
 import app.cash.zipline.loader.ZiplineFile
@@ -50,31 +51,56 @@ class ZiplineCompilerTest {
 
   @Test
   fun `write to and read from zipline`() {
-    val moduleNameToFile = compile("src/test/resources/happyPath/", true)
-    for ((moduleName, ziplineFile) in moduleNameToFile) {
-      loadJsModule(jsEngine, moduleName, ziplineFile.quickjsBytecode.toByteArray())
+    // Compilation output differs by build mode: prod ships optimized bytecode
+    // without debug info (everything inlines to one frame); debug builds skip
+    // optimization and emit debug info (the full goBoom chain with Kotlin
+    // file:line frames). The CDP debug port switches the compiler's engine
+    // into debug compilation.
+    val hermesProd = System.getProperty("hermesProd")?.toBooleanStrictOrNull() ?: true
+    if (!hermesProd) {
+      Zipline.cdpDebugPort = 9399
     }
+    try {
+      val moduleNameToFile = compile("src/test/resources/happyPath/", true)
+      for ((moduleName, ziplineFile) in moduleNameToFile) {
+        loadJsModule(jsEngine, moduleName, ziplineFile.jsBytecode.toByteArray())
+      }
 
-    val exception = assertFailsWith<Exception> {
-      jsEngine.evaluate("require('./hello.js').sayHello()", "test.js")
+      val exception = assertFailsWith<Exception> {
+        jsEngine.evaluate("require('./hello.js').sayHello()", "test.js")
+      }
+      if (hermesProd) {
+        assertThat(exception.stackTraceToString()).startsWith(
+          """
+          |app.cash.zipline.JsException: boom!
+          |	at JavaScript.sayHello(<js-code>:1)
+          |
+          """.trimMargin(),
+        )
+      } else {
+        assertThat(exception.stackTraceToString()).startsWith(
+          """
+          |app.cash.zipline.JsException: boom!
+          |	at JavaScript.goBoom1(<js-code>:1)
+          |	at JavaScript.goBoom2(throwException.kt:9)
+          |	at JavaScript.goBoom3(throwException.kt:6)
+          |	at JavaScript.sayHello(throwException.kt:3)
+          |
+          """.trimMargin(),
+        )
+      }
+    } finally {
+      if (!hermesProd) {
+        Zipline.cdpDebugPort = null
+      }
     }
-    // NOTE: Hermes's optimizer inlines the small goBoom chain, so only the
-    // sayHello frame survives, located at the throw site. The fixture source
-    // map marks the Error construction as generated glue, hence <js-code>.
-    assertThat(exception.stackTraceToString()).startsWith(
-      """
-      |app.cash.zipline.JsException: boom!
-      |	at JavaScript.sayHello(<js-code>:1)
-      |
-      """.trimMargin(),
-    )
   }
 
   @Test
   fun `write to and read from zipline no inline`() {
     val moduleNameToFile = compile("src/test/resources/happyPathNoInline/", true)
     for ((moduleName, ziplineFile) in moduleNameToFile) {
-      loadJsModule(jsEngine, moduleName, ziplineFile.quickjsBytecode.toByteArray())
+      loadJsModule(jsEngine, moduleName, ziplineFile.jsBytecode.toByteArray())
     }
 
     val exception = assertFailsWith<Exception> {
@@ -98,7 +124,7 @@ class ZiplineCompilerTest {
   @Test
   fun `no source map`() {    val moduleNameToFile = compile("src/test/resources/happyPathNoSourceMap/", false)
     for ((_, ziplineFile) in moduleNameToFile) {
-      jsEngine.execute(ziplineFile.quickjsBytecode.toByteArray())
+      jsEngine.execute(ziplineFile.jsBytecode.toByteArray())
     }
     assertEquals("Hello, guy!", jsEngine.evaluate("greet('guy')", "test.js"))
   }
@@ -107,7 +133,7 @@ class ZiplineCompilerTest {
   fun `js with imports and exports`() {
     val moduleNameToFile = compile("src/test/resources/jsWithImportsExports/", false)
     for ((name, ziplineFile) in moduleNameToFile) {
-      loadJsModule(jsEngine, name, ziplineFile.quickjsBytecode.toByteArray())
+      loadJsModule(jsEngine, name, ziplineFile.jsBytecode.toByteArray())
     }
   }
 
@@ -131,19 +157,19 @@ class ZiplineCompilerTest {
       removedFiles = File("$rootProject/removed").listFiles()!!.asList(),
     )
     for ((_, ziplineFile) in moduleNameToFile) {
-      jsEngine.execute(ziplineFile.quickjsBytecode.toByteArray())
+      jsEngine.execute(ziplineFile.jsBytecode.toByteArray())
     }
 
     // Jello file was removed
     assertFalse(File("$outputDir/jello.zipline").exists())
     // Bello file was added
-    jsEngine.execute(readZiplineFile(File("$outputDir/bello.zipline")).quickjsBytecode.toByteArray())
+    jsEngine.execute(readZiplineFile(File("$outputDir/bello.zipline")).jsBytecode.toByteArray())
     assertEquals("Bello!", jsEngine.evaluate("bello()", "test.js"))
     // Hello file was replaced with bonjour
-    jsEngine.execute(readZiplineFile(File("$outputDir/hello.zipline")).quickjsBytecode.toByteArray())
+    jsEngine.execute(readZiplineFile(File("$outputDir/hello.zipline")).jsBytecode.toByteArray())
     assertEquals("Bonjour, guy!", jsEngine.evaluate("greet('guy')", "test.js"))
     // Yello file remains untouched
-    jsEngine.execute(readZiplineFile(File("$outputDir/yello.zipline")).quickjsBytecode.toByteArray())
+    jsEngine.execute(readZiplineFile(File("$outputDir/yello.zipline")).jsBytecode.toByteArray())
     assertEquals("HELLO", jsEngine.evaluate("greet()", "test.js"))
   }
 

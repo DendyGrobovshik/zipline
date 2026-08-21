@@ -210,6 +210,73 @@ There are a few things you can do to make sure that hot-reload is running as fas
 4. In your app's build.gradle.kts add `tasks.withType(DukatTask::class) { enabled = false }`
    to turn off the Dukat task if you are not using TypeScript type declarations.
 
+### Debugging Kotlin/JS with Chrome DevTools (CDP)
+
+This fork embeds Hermes with its CDP (Chrome DevTools Protocol) agent enabled, so the guest JS
+can be debugged from Chrome: breakpoints, stepping, call stacks and scopes.
+
+**App side (Android).** Set the debug port in the app module's `zipline` extension; the
+plugin generates an `app.cash.zipline.ZiplineCdpConfig` class into the app and the engine
+picks it up automatically — no app code needed:
+
+```kotlin
+zipline {
+  cdpDebugPort = 9222
+}
+```
+
+**App side (iOS / Kotlin/Native).** Set the `ZIPLINE_CDP_PORT` environment variable before the
+first `Zipline` instance is created (e.g. in the Xcode scheme's environment variables, or via
+`setenv("ZIPLINE_CDP_PORT", "9222", 1)` early in app startup). iOS also requires the full,
+non-lean engine — build the library with `-PhermesProd=false` (the CDP debugger needs the JS
+parser for `Runtime.evaluate`, which lean builds exclude).
+
+Every `Zipline.create(...)` then attaches its engine to a debug server on that port. The server
+binds to loopback only; on iOS the simulator shares the host network, so Chrome on the host
+reaches it directly at `localhost:9222`.
+
+**Compiler side.** Breakpoints need the debug info that is only emitted when the Kotlin/JS output
+is compiled with a source map. To let Chrome DevTools fetch the generated `.js` sources and
+`.js.map` files (and to show scripts under a fetchable URL), set `debugSourceUrlPrefix` in the
+`zipline` Gradle extension, pointing at the Zipline development server:
+
+```kotlin
+zipline {
+    debugSourceUrlPrefix.set("http://localhost:8080") // match httpServerPort
+}
+```
+
+This bakes the URL into the bytecode as each script's URL and copies the `.js`/`.js.map` files
+next to the `.zipline` files so the dev server (`serveDevelopmentZipline`) serves them.
+Leave it unset for production builds (no debug info, smaller bytecode).
+
+**Connect.**
+
+```console
+# Android:
+$ adb forward tcp:9222 tcp:9222
+# iOS simulator: nothing to forward; the simulator shares the host network.
+```
+
+Then open `chrome://inspect`, add `localhost:9222` under "Configure...", and click "inspect" on
+the "Zipline (Hermes)" target. Alternatively open the `devtoolsFrontendUrl` reported by
+[localhost:9222/json/list](http://localhost:9222/json/list) directly in Chrome.
+
+Notes and limitations:
+
+* Sources and source maps are fetched by DevTools from the dev server on the host machine
+  (`localhost:8080`); the device never downloads them.
+* The lean Hermes build used on Android has no JS parser, so `Runtime.evaluate` (the DevTools
+  console) does not work. Breakpoints, stepping, call stacks and scopes do.
+* When the Zipline instance is reloaded (hot-reload), its debug target disappears and a new one
+  is published; re-attach the frontend to the new target (breakpoints by URL re-apply when set
+  again).
+* Debugging over CDP also works on the host JVM and on Kotlin/Native (macOS/Linux/iOS). The
+  end-to-end test `CdpDebugTest` lives in `hostTest` and runs on all of them.
+* On physical iOS devices the debug server is only reachable via the device's own loopback, so
+  on-device debugging requires a tunnel (e.g. `pymobiledevice3 usbmux forward`); the simulator
+  needs none.
+
 ### Requirements
 
 Zipline works on Android 4.3+ (API level 18+), Java 8+, and [Kotlin/Native].

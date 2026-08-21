@@ -16,6 +16,7 @@ import kotlinx.cinterop.*
 // invocation (any thread running JS) may race.
 private val outboundChannels = AtomicReference<Map<Long, CallChannel>>(emptyMap())
 private val rdmaChangeSinks = AtomicReference<Map<Long, RdmaChangeSink>>(emptyMap())
+private val cdpListeners = AtomicReference<Map<Long, CdpListener>>(emptyMap())
 
 private fun <V> AtomicReference<Map<Long, V>>.putValue(key: Long, value: V) {
   while (true) {
@@ -69,6 +70,24 @@ private fun rdmaChangeSinkSendChanges(context: COpaquePointer?) {
     sink.sendChanges()
 }
 
+// CDP session callbacks (see CdpSession.cpp). May be invoked from arbitrary
+// threads; the listener lookup is a lock-free read of the copy-on-write map.
+private fun cdpMessageCallback(context: COpaquePointer?, json: CPointer<ByteVar>?) {
+    val listener = cdpListeners.load()[context?.rawValue?.toLong() ?: return] ?: return
+    listener.onMessage(json?.toKString() ?: return)
+}
+
+private fun cdpTasksEnqueuedCallback(context: COpaquePointer?) {
+    val listener = cdpListeners.load()[context?.rawValue?.toLong() ?: return] ?: return
+    listener.onTasksEnqueued()
+}
+
+// Called when the native CDP session is torn down (HermesRuntime_destroy):
+// drop the registry entry so it can't retain a dead listener.
+private fun cdpDisposedCallback(context: COpaquePointer?) {
+    cdpListeners.removeValue(context?.rawValue?.toLong() ?: return)
+}
+
 /*
 * This class is NOT thread safe. If multiple threads access an instance concurrently it must be
 * synchronized externally.
@@ -82,8 +101,14 @@ actual class JsEngine private constructor(
 
   actual companion object {
     actual fun create(): JsEngine {
-      val runtime = HermesRuntime_create()
-        ?: throw UnsupportedOperationException("Failed to create Hermes runtime")
+      // CDP debugging compiles eagerly so breakpoints bind in
+      // runtime-compiled source (lazy functions have no code blocks yet).
+      val debugging = app.cash.zipline.internal.cdp.cdpDebugPort() != null
+      val runtime = if (debugging) {
+        HermesRuntime_createForDebugging()
+      } else {
+        HermesRuntime_create()
+      } ?: throw UnsupportedOperationException("Failed to create Hermes runtime")
       val jsiRuntime = HermesRuntime_getJsiRuntime(runtime)
         ?: throw UnsupportedOperationException("Failed to get jsi runtime from Hermes context")
 
@@ -382,9 +407,50 @@ actual class JsEngine private constructor(
     check(!closed) { "JsEngine instance was closed" }
   }
 
+  internal actual fun cdpAttach(listener: CdpListener): Boolean {
+    checkNotClosed()
+    val context = requireNotNull(contextPointer) { "Engine has no native context" }
+    cdpListeners.putValue(context.rawValue.toLong(), listener)
+    // The context pointer doubles as the opaque listener handle, matching the
+    // outbound channel callbacks above. The registry entry is dropped by
+    // cdpDisposedCallback when the native session is torn down.
+    val result = HermesContext_cdpAttach(
+      context,
+      context,
+      staticCFunction(::cdpMessageCallback),
+      staticCFunction(::cdpTasksEnqueuedCallback),
+      staticCFunction(::cdpDisposedCallback),
+    )
+    if (result == 0) {
+      cdpListeners.removeValue(context.rawValue.toLong())
+      return false
+    }
+    return true
+  }
+
+  internal actual fun cdpHandleCommand(json: String) {
+    checkNotClosed()
+    HermesContext_cdpHandleCommand(contextPointer, json)
+  }
+
+  internal actual fun cdpDrainTasks() {
+    checkNotClosed()
+    HermesContext_cdpDrainTasks(contextPointer)
+  }
+
+  internal actual fun cdpResetAgent() {
+    checkNotClosed()
+    HermesContext_cdpResetAgent(contextPointer)
+  }
+
   actual override fun close() {
     if (!closed) {
       closed = true
+
+      // Detach from the CDP debug server before the native session goes away
+      // (HermesRuntime_destroy tears it down and drops the listener entry via
+      // cdpDisposedCallback).
+      app.cash.zipline.internal.cdp.CdpDebugSupport.detach(this)
 
       // Deregister this engine's channel/sink so late JS calls into the
       // (about to be destroyed) runtime can't reach Kotlin, and so the

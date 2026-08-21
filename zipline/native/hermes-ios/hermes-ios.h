@@ -20,6 +20,10 @@ int HermesFramework_init(void** runtimeOut);
 // ios-layer context that extends the core Hermes context with the
 // per-runtime bridge state (channel callbacks, RDMA state).
 void* HermesRuntime_create(void);
+// Creates a runtime for CDP debugging: eager compilation (so breakpoints
+// bind) and eval enabled (for Debugger.evaluateOnCallFrame). Use when the
+// CDP debug server is enabled; requires a non-lean build.
+void* HermesRuntime_createForDebugging(void);
 void HermesRuntime_destroy(void* runtime);
 
 // Get the jsi::Runtime from a runtime returned by HermesRuntime_create
@@ -81,6 +85,29 @@ void HermesContext_setOutboundChannelCallbacks(void* context,
 // passed back on invocation.
 typedef void (*RdmaChangeSinkFn)(void* context);
 void HermesContext_setRdmaChangeSink(void* context, RdmaChangeSinkFn sinkFn);
+
+// CDP (Chrome DevTools Protocol) debugging. Callbacks may be invoked from
+// arbitrary threads; `listener` is an opaque handle passed back on every
+// invocation (Kotlin/Native registers staticCFunction pointers and looks up
+// the real listener in a context-keyed registry, like the outbound channel
+// callbacks above). Only functional in builds with HERMES_ENABLE_DEBUGGER
+// (non-lean); HermesContext_cdpAttach returns 0 otherwise. The session is
+// torn down by HermesRuntime_destroy; disposedFn is then called to release
+// the listener handle.
+typedef void (*CdpMessageFn)(void* listener, const char* json);
+typedef void (*CdpTasksEnqueuedFn)(void* listener);
+typedef void (*CdpListenerDisposedFn)(void* listener);
+int HermesContext_cdpAttach(void* context, void* listener,
+                            CdpMessageFn messageFn,
+                            CdpTasksEnqueuedFn tasksEnqueuedFn,
+                            CdpListenerDisposedFn disposedFn);
+// Forwards a CDP command (UTF-8 JSON). Safe to call from any thread.
+void HermesContext_cdpHandleCommand(void* context, const char* json);
+// Runs queued debugger runtime tasks. Must be called on the JS thread.
+void HermesContext_cdpDrainTasks(void* context);
+// Re-creates the CDP agent (preserving breakpoint state) for the next
+// debugger client.
+void HermesContext_cdpResetAgent(void* context);
 
 // Outbound call channel (JS calling into Kotlin)
 // Sets up global "outboundChannel" object with call/disconnect functions

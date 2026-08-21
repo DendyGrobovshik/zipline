@@ -8,3 +8,11 @@
 
 # Type name and functions resolved from JNI code.
 -keep app.cash.zipline.internal.bridge.CallChannel
+
+# Method names (onMessage, onTasksEnqueued) are resolved from JNI code.
+-keep interface app.cash.zipline.CdpListener {
+  *;
+}
+-keepclasseswithmembers class * implements app.cash.zipline.CdpListener {
+  *;
+}

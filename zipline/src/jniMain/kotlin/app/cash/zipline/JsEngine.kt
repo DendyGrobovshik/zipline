@@ -3,6 +3,7 @@ package app.cash.zipline
 import app.cash.zipline.internal.bridge.CallChannel
 import app.cash.zipline.internal.bridge.INBOUND_CHANNEL_NAME
 import app.cash.zipline.internal.bridge.OUTBOUND_CHANNEL_NAME
+import app.cash.zipline.internal.cdp.cdpDebugPort
 import app.cash.zipline.internal.log
 import java.io.Closeable
 
@@ -17,6 +18,10 @@ actual class JsEngine private constructor(
   internal var context: Long,
 ) : AutoCloseable,
   Closeable {
+
+  /** Captured at construction; see [evaluate]. */
+  private val debugCompilation = cdpDebugPort() != null
+
   actual companion object {
     init {
       loadNativeLibrary()
@@ -25,10 +30,15 @@ actual class JsEngine private constructor(
     /**
      * Create a new interpreter instance. Calls to this method **must** be matched with
      * calls to [close] on the returned instance to avoid leaking native memory.
+     *
+     * When the CDP debug server is enabled ([Zipline.cdpDebugPort] is set), the
+     * engine compiles JavaScript eagerly so that breakpoints bind in
+     * runtime-compiled source (lazy functions have no code blocks to patch).
      */
     @JvmStatic
     actual fun create(): JsEngine {
-      val ctx = createContext()
+      val forceEager = cdpDebugPort() != null
+      val ctx = createContext(forceEager)
       if (ctx == 0L) {
         throw OutOfMemoryError("Cannot create JsEngine instance")
       }
@@ -36,7 +46,7 @@ actual class JsEngine private constructor(
     }
 
     @JvmStatic
-    external fun createContext(): Long
+    external fun createContext(forceEagerCompilation: Boolean): Long
 
     actual val version: String
       get() = jsEngineVersion
@@ -84,9 +94,18 @@ actual class JsEngine private constructor(
    * Evaluate [script] and return any result. [fileName] will be used in error
    * reporting.
    *
+   * When CDP debugging is enabled the script is compiled by the runtime itself
+   * (instead of compile + execute bytecode): the scoping table and the
+   * sourceMappingURL magic comment only live in the in-memory debug info and
+   * do not survive bytecode serialization, so the bytecode path cannot
+   * support frame evaluation or source-map announcement.
+   *
    * @throws JsException if there is an error evaluating the script.
    */
   actual fun evaluate(script: String, fileName: String): Any? {
+    if (debugCompilation) {
+      return evaluate(context, script, fileName)
+    }
     val bytecode = compile(script, fileName)
     return execute(bytecode)
   }
@@ -163,10 +182,38 @@ actual class JsEngine private constructor(
     installModuleLoader(context)
   }
 
+  /**
+   * Starts a CDP debug session on this engine. Returns false when the engine was built without
+   * debugger support. [listener] receives outbound CDP messages from arbitrary threads.
+   */
+  internal actual fun cdpAttach(listener: CdpListener): Boolean {
+    return cdpAttach(context, listener)
+  }
+
+  /** Forwards a CDP command (UTF-8 JSON) to the debug session. Safe to call from any thread. */
+  internal actual fun cdpHandleCommand(json: String) {
+    cdpHandleCommand(context, json)
+  }
+
+  /** Runs queued debugger runtime tasks. Must be called on the JS thread. */
+  internal actual fun cdpDrainTasks() {
+    cdpDrainTasks(context)
+  }
+
+  /** Re-creates the CDP agent (preserving breakpoint state) for the next debugger client. */
+  internal actual fun cdpResetAgent() {
+    cdpResetAgent(context)
+  }
+
+  internal fun cdpDetach() {
+    cdpDetach(context)
+  }
+
   actual override fun close() {
     val contextToClose = context
     if (contextToClose != 0L) {
       context = 0L
+      app.cash.zipline.internal.cdp.CdpDebugSupport.detach(this)
       destroyContext(contextToClose)
     }
   }
@@ -181,6 +228,7 @@ actual class JsEngine private constructor(
   private external fun getInboundCallChannel(context: Long, name: String): Long
   private external fun setOutboundCallChannel(context: Long, name: String, callChannel: CallChannel)
   private external fun execute(context: Long, bytecode: ByteArray, fileName: String): Any?
+  private external fun evaluate(context: Long, source: String, fileName: String): Any?
   private external fun compile(context: Long, sourceCode: String, fileName: String, sourceMap: String?): ByteArray
   private external fun memoryUsage(context: Long): MemoryUsage?
   private external fun gc(context: Long)
@@ -191,6 +239,11 @@ actual class JsEngine private constructor(
   private external fun callGlobalFunctionWithStringArg(context: Long, functionName: String, arg: String): String?
   private external fun callRequireMethod(context: Long, moduleId: String, methodName: String)
   private external fun installModuleLoader(context: Long)
+  private external fun cdpAttach(context: Long, listener: CdpListener): Boolean
+  private external fun cdpHandleCommand(context: Long, json: String)
+  private external fun cdpDrainTasks(context: Long)
+  private external fun cdpResetAgent(context: Long)
+  private external fun cdpDetach(context: Long)
   @JvmName("initRdmaChangesChannel")
   private external fun initRdmaChangesChannel(context: Long)
 }

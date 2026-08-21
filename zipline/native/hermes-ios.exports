@@ -47,3 +47,8 @@ _HermesRuntime_getJsiRuntime
 _js_register_intrinsics
 _HermesContext_hasGlobalObject
 _HermesCore_hasGlobalObject
+_HermesContext_cdpAttach
+_HermesContext_cdpDrainTasks
+_HermesContext_cdpHandleCommand
+_HermesContext_cdpResetAgent
+_HermesRuntime_createForDebugging

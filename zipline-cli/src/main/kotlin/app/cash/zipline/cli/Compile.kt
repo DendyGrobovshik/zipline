@@ -50,6 +50,37 @@ internal class Compile : CliktCommand("compile") {
   private val version by option()
   private val stripLineNumbers by option().flag()
 
+  private val debugSourceUrlPrefix by option()
+    .help(
+      """
+      |URL prefix baked into the compiled bytecode as each script's URL (e.g.
+      |"http://localhost:8080"), so Chrome DevTools can fetch the .js sources and
+      |.js.map source maps from the Zipline development server while CDP debugging.
+      |When set, the .js and .js.map files are also copied to the output directory
+      |(which the development server serves) and debug info is kept in the bytecode.
+      """.trimMargin(),
+    )
+
+  private val debugSourceRootDir by option("--debug-source-root")
+    .file()
+    .help(
+      """
+      |Repository root used to rewrite source map "sources" into server-resolvable
+      |paths (sibling checkouts are mapped under __kt_root__). Only meaningful
+      |together with --debug-source-url-prefix.
+      """.trimMargin(),
+    )
+
+  private val serveSourceCode by option("--serve-source-code").flag()
+    .help(
+      """
+      |Serve raw JavaScript in the .zipline slots instead of Hermes bytecode, so
+      |the engine compiles on device at runtime (CDP frame evaluation and scope
+      |inspection only work with runtime-compiled sources; requires the full,
+      |non-lean engine in the app).
+      """.trimMargin(),
+    )
+
   private val signingKeys by option("--sign")
     .help(
       """
@@ -89,6 +120,9 @@ internal class Compile : CliktCommand("compile") {
       version = version,
       metadata = metadata,
       stripLineNumbers = stripLineNumbers,
+      debugSourceUrlPrefix = debugSourceUrlPrefix,
+      debugSourceRootDir = debugSourceRootDir,
+      serveSourceCode = serveSourceCode,
     )
 
     if (addedFiles.size or removedFiles.size or modifiedFiles.size != 0) {

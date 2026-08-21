@@ -20,6 +20,7 @@ import org.gradle.api.DefaultTask
 import org.gradle.api.file.DirectoryProperty
 import org.gradle.api.provider.Property
 import org.gradle.api.tasks.Input
+import org.gradle.api.tasks.Internal
 import org.gradle.api.tasks.InputDirectory
 import org.gradle.api.tasks.Optional
 import org.gradle.api.tasks.TaskAction
@@ -30,6 +31,14 @@ abstract class ZiplineServeTask : DefaultTask() {
 
   @get:InputDirectory
   abstract val inputDir: DirectoryProperty
+
+  /** Repo root; Kotlin sources referenced by source maps are served relative to it. */
+  @get:Internal
+  abstract val sourceRootDir: DirectoryProperty
+
+  /** Parent of the repo root; sibling checkouts are served under /__kt_root__/. */
+  @get:Internal
+  abstract val siblingRootDir: DirectoryProperty
 
   @get:Optional
   @get:Input
@@ -47,6 +56,8 @@ abstract class ZiplineServeTask : DefaultTask() {
         DeploymentRegistry.ChangeBehavior.BLOCK,
         ZiplineDevelopmentServer::class.java,
         inputDir.get(),
+        sourceRootDir.get(),
+        siblingRootDir.get(),
         port.orNull ?: 8080,
       )
     } else {
