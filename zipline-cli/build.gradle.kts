@@ -63,3 +63,9 @@ dependencies {
 mavenPublishing {
   configure(KotlinJvm(javadocJar = JavadocJar.Empty()))
 }
+
+// CDP-debug expectations differ between prod (optimized, no debug info) and
+// debug (unoptimized, debug info) compilation; the compiler test reads this.
+tasks.withType<Test>().configureEach {
+  systemProperty("hermesProd", providers.gradleProperty("hermesProd").orNull ?: "true")
+}

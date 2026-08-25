@@ -71,6 +71,8 @@ class ZiplineDevelopmentServerTest {
   fun setUp() {
     server = ZiplineDevelopmentServer(
       inputDirectory = temporaryFolder.root,
+      sourceRootDirectory = temporaryFolder.root,
+      siblingRootDirectory = temporaryFolder.root,
       port = 16630,
     )
     server.start(FakeDeployment)

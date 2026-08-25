@@ -24,14 +24,14 @@ import okio.IOException
 
 data class ZiplineFile(
   val ziplineVersion: Int,
-  val quickjsBytecode: ByteString,
+  val jsBytecode: ByteString,
 ) {
   fun writeTo(sink: BufferedSink) {
     sink.write(MAGIC_PREFIX)
     sink.writeInt(ziplineVersion)
-    sink.writeInt(SECTION_HEADER_QUICKJS_BYTECODE)
-    sink.writeInt(quickjsBytecode.size)
-    sink.write(quickjsBytecode)
+    sink.writeInt(SECTION_HEADER_JS_BYTECODE)
+    sink.writeInt(jsBytecode.size)
+    sink.write(jsBytecode)
   }
 
   fun toByteString(): ByteString {
@@ -46,7 +46,7 @@ data class ZiplineFile(
      * This throws an IOException if the content is not a supported ZiplineFile.
      */
     fun read(source: BufferedSource): ZiplineFile {
-      var quickjsBytecode: ByteString? = null
+      var jsBytecode: ByteString? = null
       if (source.readByteString(8) != MAGIC_PREFIX) {
         throw IOException("not a zipline file")
       }
@@ -59,23 +59,23 @@ data class ZiplineFile(
       while (!source.exhausted()) {
         val sectionHeader = source.readInt()
         val sectionLength = source.readInt()
-        quickjsBytecode = source.readSection(quickjsBytecode, sectionHeader, sectionLength)
+        jsBytecode = source.readSection(jsBytecode, sectionHeader, sectionLength)
       }
 
       return ZiplineFile(
         ziplineVersion = ziplineVersion,
-        quickjsBytecode = quickjsBytecode ?: throw IOException("QuickJS bytecode section missing"),
+        jsBytecode = jsBytecode ?: throw IOException("JS bytecode section missing"),
       )
     }
 
     private fun BufferedSource.readSection(
-      quickjsBytecode: ByteString? = null,
+      jsBytecode: ByteString? = null,
       sectionHeader: Int,
       sectionLength: Int,
     ): ByteString? = when (sectionHeader) {
-      SECTION_HEADER_QUICKJS_BYTECODE -> {
-        if (quickjsBytecode != null) {
-          throw IOException("multiple QuickJS bytecode sections")
+      SECTION_HEADER_JS_BYTECODE -> {
+        if (jsBytecode != null) {
+          throw IOException("multiple JS bytecode sections")
         }
         readByteString(sectionLength.toLong())
       }
@@ -83,14 +83,17 @@ data class ZiplineFile(
       else -> {
         // Ignore unexpected section.
         skip(sectionLength.toLong())
-        quickjsBytecode
+        jsBytecode
       }
     }
 
     fun ByteString.toZiplineFile() = read(Buffer().write(this))
+
+    /** True if [this] starts with the zipline container magic bytes. */
+    fun ByteString.isZiplineFile(): Boolean = startsWith(MAGIC_PREFIX)
   }
 }
 
 private val MAGIC_PREFIX = "ZIPLINE\u0000".encodeUtf8()
 val CURRENT_ZIPLINE_VERSION = 20211020
-private val SECTION_HEADER_QUICKJS_BYTECODE = 1
+private val SECTION_HEADER_JS_BYTECODE = 1

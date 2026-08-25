@@ -21,6 +21,7 @@ import app.cash.zipline.loader.ZiplineFile
 import app.cash.zipline.loader.ZiplineFile.Companion.toZiplineFile
 import app.cash.zipline.loader.internal.multiplatformLoadJsModule
 import okio.ByteString
+import okio.ByteString.Companion.encodeUtf8
 
 /**
  * Load the [ZiplineFile] into a Zipline runtime instance.
@@ -32,9 +33,19 @@ internal class ZiplineLoadReceiver(
   override suspend fun receive(byteString: ByteString, id: String, sha256: ByteString) {
     val startValue = eventListener.moduleLoadStart(zipline, id)
     try {
-      zipline.multiplatformLoadJsModule(byteString.toZiplineFile().quickjsBytecode.toByteArray(), id)
+      if (byteString.startsWith(ZIPLINE_MAGIC)) {
+        zipline.multiplatformLoadJsModule(byteString.toZiplineFile().jsBytecode.toByteArray(), id)
+      } else {
+        // Source mode (CDP debugging): the slot carries raw JavaScript to be
+        // compiled at runtime instead of Hermes bytecode.
+        zipline.loadJsModule(byteString.utf8(), id)
+      }
     } finally {
       eventListener.moduleLoadEnd(zipline, id, startValue)
     }
+  }
+
+  private companion object {
+    private val ZIPLINE_MAGIC = "ZIPLINE\u0000".encodeUtf8()
   }
 }

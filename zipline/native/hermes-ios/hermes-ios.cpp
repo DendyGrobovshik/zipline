@@ -2,6 +2,7 @@
 #include "hermes-core.h"
 #include "../RdmaChange.h"
 #include "../ContextNative.h"
+#include "../CdpSession.h"
 #include "../InboundCallChannel.h"
 
 #include <stdio.h>
@@ -115,17 +116,34 @@ int HermesFramework_init(void** runtimeOut) {
     return 1;
 }
 
-void* HermesRuntime_create(void) {
-    void* runtime = NULL;
-    if (!HermesFramework_init(&runtime)) {
+namespace {
+
+void* createRuntime(bool forceEagerCompilation) {
+    ContextNative* ctx = new ContextNative();
+    if (!HermesCore_initContext(ctx, forceEagerCompilation)) {
+        delete ctx;
+        snprintf(g_lastError, sizeof(g_lastError), "Failed to create Hermes runtime");
         return NULL;
     }
-    return runtime;
+    return ctx;
+}
+
+} // namespace
+
+void* HermesRuntime_create(void) {
+    return createRuntime(false);
+}
+
+void* HermesRuntime_createForDebugging(void) {
+    return createRuntime(true);
 }
 
 void HermesRuntime_destroy(void* runtime) {
     if (runtime) {
         ContextNative* ctx = asNativeContext(runtime);
+        // Tear down any CDP session before the runtime goes away; the
+        // session's agent and debug API reference the runtime.
+        zipline_cdp::detach(ctx);
         HermesCore_releaseContext(ctx);
         delete ctx;
     }
@@ -171,6 +189,10 @@ HermesTaggedValue HermesContext_evaluate(void* context, const char* code, const 
         snprintf(g_lastError, sizeof(g_lastError), "Invalid runtime");
         return HermesTaggedValue{HERMES_TAG_ERROR, 0, NULL};
     }
+
+    // Run any pending CDP runtime tasks (e.g. breakpoint installation)
+    // before evaluating more JavaScript. We are on the JS thread here.
+    zipline_cdp::drainTasks(ctx);
 
     try {
         std::string source(code, strlen(code));
@@ -251,6 +273,10 @@ HermesTaggedValue HermesContext_execute(void* context, const uint8_t* bytecode, 
         snprintf(g_lastError, sizeof(g_lastError), "Invalid runtime");
         return HermesTaggedValue{HERMES_TAG_ERROR, 0, NULL};
     }
+
+    // Run any pending CDP runtime tasks (e.g. breakpoint installation)
+    // before executing more bytecode. We are on the JS thread here.
+    zipline_cdp::drainTasks(ctx);
 
     try {
         jsi::Value result = HermesCore_evaluateBytecode(
@@ -700,6 +726,10 @@ char* HermesContext_callInbound(void* context, const char* channelName, const ch
         return NULL;
     }
 
+    // Run any pending CDP runtime tasks (e.g. breakpoint installation)
+    // before calling into JavaScript. We are on the JS thread here.
+    zipline_cdp::drainTasks(ctx);
+
     // InboundCallChannel reports errors via throwJsException, captured in
     // the context's lastError and mapped to the C API error channel.
     InboundCallChannel channel(channelName);
@@ -1031,4 +1061,85 @@ void HermesBridge_installBridgeRegister(void* jsiRuntime) {
         });
 
     rt.global().setProperty(rt, "__bridgeRegister", std::move(bridgeRegisterFn));
+}
+
+// ---------------------------------------------------------------------------
+// CDP debugging. Bridges the C function-pointer API to the platform-neutral
+// CDP session core (CdpSession.cpp).
+
+namespace {
+
+// The listener handle handed to the session core: the platform's opaque
+// listener pointer plus the C callbacks to invoke for it.
+struct IosCdpListener {
+    void* listener;
+    CdpMessageFn messageFn;
+    CdpTasksEnqueuedFn tasksEnqueuedFn;
+    CdpListenerDisposedFn disposedFn;
+};
+
+void iosCdpOnMessage(void* ref, const std::string& json) {
+    IosCdpListener* listener = static_cast<IosCdpListener*>(ref);
+    listener->messageFn(listener->listener, json.c_str());
+}
+
+void iosCdpOnTasksEnqueued(void* ref) {
+    IosCdpListener* listener = static_cast<IosCdpListener*>(ref);
+    listener->tasksEnqueuedFn(listener->listener);
+}
+
+void iosCdpDispose(void* ref) {
+    IosCdpListener* listener = static_cast<IosCdpListener*>(ref);
+    if (!listener) return;
+    if (listener->disposedFn) {
+        listener->disposedFn(listener->listener);
+    }
+    delete listener;
+}
+
+} // namespace
+
+int HermesContext_cdpAttach(void* context, void* listener,
+                            CdpMessageFn messageFn,
+                            CdpTasksEnqueuedFn tasksEnqueuedFn,
+                            CdpListenerDisposedFn disposedFn) {
+    if (!context || !listener || !messageFn || !tasksEnqueuedFn) {
+        snprintf(g_lastError, sizeof(g_lastError), "Invalid parameters");
+        return 0;
+    }
+
+    IosCdpListener* iosListener = new IosCdpListener();
+    iosListener->listener = listener;
+    iosListener->messageFn = messageFn;
+    iosListener->tasksEnqueuedFn = tasksEnqueuedFn;
+    iosListener->disposedFn = disposedFn;
+
+    zipline_cdp::Listener coreListener;
+    coreListener.ref = iosListener;
+    coreListener.onMessage = &iosCdpOnMessage;
+    coreListener.onTasksEnqueued = &iosCdpOnTasksEnqueued;
+    coreListener.dispose = &iosCdpDispose;
+    // The core disposes iosListener if the session is not created (e.g.
+    // builds without HERMES_ENABLE_DEBUGGER, or a duplicate attach).
+    if (!zipline_cdp::attach(asNativeContext(context), coreListener)) {
+        snprintf(g_lastError, sizeof(g_lastError),
+                 "Engine does not support debugging (HERMES_ENABLE_DEBUGGER off?)");
+        return 0;
+    }
+    return 1;
+}
+
+void HermesContext_cdpHandleCommand(void* context, const char* json) {
+    if (!context || !json) return;
+    zipline_cdp::handleCommand(asNativeContext(context), std::string(json));
+}
+
+void HermesContext_cdpDrainTasks(void* context) {
+    if (!context) return;
+    zipline_cdp::drainTasks(asNativeContext(context));
+}
+
+void HermesContext_cdpResetAgent(void* context) {
+    if (!context) return;
+    zipline_cdp::resetAgent(asNativeContext(context));
 }

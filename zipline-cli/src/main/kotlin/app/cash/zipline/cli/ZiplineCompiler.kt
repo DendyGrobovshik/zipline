@@ -26,6 +26,13 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.put
 import okio.ByteString.Companion.toByteString
 import okio.HashingSink
 import okio.buffer
@@ -39,6 +46,9 @@ internal class ZiplineCompiler(
   private val version: String?,
   private val metadata: Map<String, String>,
   private val stripLineNumbers: Boolean,
+  private val debugSourceUrlPrefix: String? = null,
+  private val debugSourceRootDir: File? = null,
+  private val serveSourceCode: Boolean = false,
 ) {
   companion object {
     private const val MODULE_PATH_PREFIX = "./"
@@ -74,6 +84,10 @@ internal class ZiplineCompiler(
     // Delete Zipline files for any removed JS files.
     removedFileNames.forEach {
       File(outputDir.path + "/" + it.removeSuffix(".js") + ZIPLINE_EXTENSION).delete()
+      if (debugSourceUrlPrefix != null) {
+        File(outputDir, it).delete()
+        File(outputDir, "$it.map").delete()
+      }
     }
 
     // Compile the newly added or modified files and add them into the module list.
@@ -99,12 +113,81 @@ internal class ZiplineCompiler(
       .toMap()
   }
 
+  /**
+   * Rewrites a source map's "sources" entries so they resolve under the directory the
+   * development server serves. Paths inside [sourceRootDir] become root-relative; paths in
+   * sibling checkouts (e.g. redwood-tret, zipline-hermes) become `__kt_root__/...`; anything
+   * else (CI/buildbot paths) is left unchanged and will simply be unavailable in DevTools.
+   */
+  private fun rewriteSourceMapSources(mapText: String, mapFile: File, sourceRootDir: File): String {
+    val root = sourceRootDir.canonicalFile
+    val parent = root.parentFile
+    val mapDir = mapFile.canonicalFile.parentFile
+    val mapJson = try {
+      Json.parseToJsonElement(mapText).jsonObject
+    } catch (_: Exception) {
+      return mapText
+    }
+    val sources = mapJson["sources"]?.jsonArray ?: return mapText
+    val rewritten = sources.map { element ->
+      val source = (element as? JsonPrimitive)?.contentOrNull ?: return@map element
+      val resolved = File(mapDir, source).canonicalFile
+      when {
+        resolved.path.startsWith(root.path + File.separator) ->
+          JsonPrimitive(resolved.relativeTo(root).path)
+        parent != null && resolved.path.startsWith(parent.path + File.separator) ->
+          JsonPrimitive("__kt_root__/" + resolved.relativeTo(parent).path)
+        else -> element
+      }
+    }
+    return buildJsonObject {
+      mapJson.forEach { (key, value) ->
+        if (key == "sources") put("sources", JsonArray(rewritten)) else put(key, value)
+      }
+    }.toString()
+  }
+
   private fun compileSingleFile(
     jsFile: File,
   ): Pair<String, ZiplineManifest.Module> {
     val jsSourceMapFile = File("${jsFile.path}.map")
     val outputZiplineFilePath = jsFile.nameWithoutExtension + ZIPLINE_EXTENSION
     val outputZiplineFile = File(outputDir.path, outputZiplineFilePath)
+
+    if (serveSourceCode) {
+      // Source mode: serve the raw JavaScript in the .zipline slot instead of
+      // Hermes bytecode, so the engine compiles it on device. Runtime
+      // compilation populates the scoping info table, which makes CDP frame
+      // evaluation and scope inspection work (impossible with precompiled
+      // bytecode). Requires the full (non-lean) engine in the app.
+      var source = jsFile.readText()
+      if (debugSourceUrlPrefix != null) {
+        // Point the script's debug-info URL at the dev server; honored by
+        // Hermes at runtime compile (//# sourceURL directive).
+        source = source.trimEnd() +
+          "\n//# sourceURL=${debugSourceUrlPrefix.trimEnd('/')}/${jsFile.name}\n"
+      }
+      val sha256 = outputZiplineFile.sink().use { fileSink ->
+        val hashingSink = HashingSink.sha256(fileSink)
+        hashingSink.buffer().use { it.writeUtf8(source) }
+        hashingSink.hash
+      }
+      // Keep serving the .js/.js.map alongside for DevTools.
+      if (debugSourceUrlPrefix != null) {
+        File(outputDir, jsFile.name).writeText(source)
+        if (jsSourceMapFile.exists()) {
+          val mapText = jsSourceMapFile.readText()
+          val rewritten = debugSourceRootDir?.let { rewriteSourceMapSources(mapText, jsSourceMapFile, it) }
+            ?: mapText
+          File(outputDir, jsSourceMapFile.name).writeText(rewritten)
+        }
+      }
+      return "$MODULE_PATH_PREFIX${jsFile.name}" to ZiplineManifest.Module(
+        url = outputZiplineFilePath,
+        sha256 = sha256,
+        dependsOnIds = parseDefineDependencies(source),
+      )
+    }
 
     val jsEngine = JsEngine.create()
     jsEngine.use {
@@ -161,5 +244,22 @@ internal class ZiplineCompiler(
     app.cash.zipline.internal.collectModuleDependencies(jsEngine)
     jsEngine.execute(bytecode)
     return app.cash.zipline.internal.getModuleDependencies(jsEngine)
+  }
+
+  /**
+   * Extracts module dependencies from the UMD wrapper's `define([...])` header,
+   * e.g. `define(['exports', './foo.js'], factory)` -> `["./foo.js"]`.
+   * Used in source mode where there is no bytecode to inspect.
+   *
+   * This regex-parses the first `define([` occurrence: it assumes compiler-
+   * generated Kotlin/JS UMD output (single top-level `define` call, simple
+   * string-literal dependency names), not arbitrary JavaScript.
+   */
+  private fun parseDefineDependencies(source: String): List<String> {
+    val match = Regex("""define\(\s*\[([^]]*)]""").find(source) ?: return emptyList()
+    return Regex("""['"]([^'"]+)['"]""").findAll(match.groupValues[1])
+      .map { it.groupValues[1] }
+      .filter { it != "exports" && it != "require" }
+      .toList()
   }
 }

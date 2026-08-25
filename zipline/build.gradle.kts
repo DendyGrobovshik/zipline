@@ -51,6 +51,12 @@ dependencies {
   add(NATIVE_COMPILER_PLUGIN_CLASSPATH_CONFIGURATION_NAME, projects.ziplineKotlinPlugin)
 }
 
+// Lean (no JIT/parser, ~1MB smaller per ABI) is the default. Pass
+// -PhermesProd=false for the full engine: required for CDP debugging
+// (Runtime.evaluate / evaluateOnCallFrame compile JS at runtime). Also gates
+// the CDP test sources and their Ktor client dependencies.
+val hermesProd = providers.gradleProperty("hermesProd").orNull?.toBooleanStrictOrNull() ?: true
+
 kotlin {
   androidTarget {
     // Substitute release AAR with debug AAR when the
@@ -106,9 +112,43 @@ kotlin {
       dependencies {
         api(libs.okio.core)
       }
+      if (hermesProd) {
+        // Prod: no CDP debug server and no Ktor dependencies.
+        kotlin {
+          srcDir("kotlin")
+          srcDir("src/hostMainProd/kotlin")
+          exclude("app/cash/zipline/internal/cdp/KtorWebSocketConnection.kt")
+          exclude("app/cash/zipline/internal/cdp/KtorNetworkCdpServer.kt")
+          exclude("app/cash/zipline/internal/cdp/KtorHttpGet.kt")
+        }
+      } else {
+        dependencies {
+          implementation(libs.ktor.network)
+          implementation(libs.ktor.websockets)
+          implementation(libs.ktor.client.core)
+          implementation(libs.ktor.client.cio)
+        }
+      }
     }
     val hostTest by creating {
       dependsOn(commonTest)
+      if (hermesProd) {
+        // CDP tests need the full (debuggable) engine; skip their sources in
+        // prod builds so the Ktor client deps aren't needed either.
+        kotlin {
+          srcDir("kotlin")
+          exclude("app/cash/zipline/CdpDebugTest.kt")
+          exclude("app/cash/zipline/internal/cdp/**")
+        }
+      } else {
+        dependencies {
+          // CDP test client (Ktor client WebSockets work on JVM and Native).
+          implementation(libs.ktor.client.core)
+          implementation(libs.ktor.client.cio)
+          implementation(libs.ktor.client.websockets)
+          implementation(libs.ktor.network)
+        }
+      }
     }
 
     val jniMain by creating {
@@ -119,6 +159,12 @@ kotlin {
     }
     val jniTest by creating {
       dependsOn(hostTest)
+      if (hermesProd) {
+        kotlin {
+          srcDir("kotlin")
+          exclude("app/cash/zipline/internal/cdp/**")
+        }
+      }
     }
 
     val androidMain by getting {
@@ -141,6 +187,12 @@ kotlin {
     val jvmTest by getting {
       dependsOn(jniTest)
       resources.srcDir(copyTestingJs)
+      if (hermesProd) {
+        kotlin {
+          srcDir("kotlin")
+          exclude("app/cash/zipline/SourceMapUrlProbeTest.kt")
+        }
+      }
       dependencies {
         implementation(libs.junit)
         implementation(projects.ziplineTesting)
@@ -152,6 +204,12 @@ kotlin {
     }
     val nativeTest by getting {
       dependsOn(hostTest)
+      if (hermesProd) {
+        kotlin {
+          srcDir("kotlin")
+          exclude("app/cash/zipline/internal/cdp/**")
+        }
+      }
     }
 
     targets.withType<KotlinNativeTarget> {
@@ -203,9 +261,14 @@ kotlin {
           val hermesHostLibDir = when {
             konanTarget.family == Family.LINUX -> "linux-x64"
             konanTarget.architecture == Architecture.ARM64 -> "macos-arm64"
-            else -> "macos-x64"
+            // Matches registerBuildHermesHostMacos("x86_64").
+            else -> "macos-x86_64"
           }
-          linkerOpts += "-L${rootDir}/zipline/build/hermes-jni/$hermesHostLibDir"
+          linkerOpts += listOf(
+            "-L${rootDir}/zipline/build/hermes-jni/$hermesHostLibDir",
+            // Let the loader find libhermesvm.dylib at test/executable runtime.
+            "-rpath", "${rootDir}/zipline/build/hermes-jni/$hermesHostLibDir",
+          )
         }
       }
 
@@ -252,7 +315,6 @@ buildConfig {
   sourceSets.named("hostMain") {
     packageName("app.cash.zipline")
     buildConfigField("String", "jsEngineVersion", "\"${jsEngineVersion()}\"")
-    buildConfigField("String", "hermesLibraryName", "\"${hermesLibraryName()}\"")
   }
 }
 
@@ -265,12 +327,6 @@ fun jsEngineVersion(): String {
   // zipline/native/hermes/hermes-git-revision). Expose that here so the
   // generated BuildConfig mirrors the same value across host + Android.
   return File(projectDir, "native/hermes/hermes-git-revision").readText().trim()
-}
-
-fun hermesLibraryName(): String {
-  // Lean mode is always enabled for Maven publish builds. This excludes
-  // JIT/parser for smaller APKs; compile() will throw UnsupportedOperationException.
-  return "hermesvmlean"
 }
 
 // -----------------------------------------------------------------------------
@@ -398,7 +454,7 @@ val buildHermesMacosStatic: TaskProvider<Exec> =
         -DCMAKE_BUILD_TYPE=MinSizeRel \
         -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64" \
         -DCMAKE_OSX_DEPLOYMENT_TARGET=10.15 \
-        -DHERMES_ENABLE_DEBUGGER=OFF \
+        -DHERMES_ENABLE_DEBUGGER=ON \
         -DHERMES_ENABLE_INTL=ON \
         -DHERMES_ENABLE_TEST_SUITE=OFF \
         -DHERMES_ENABLE_TOOLS=OFF \
@@ -464,11 +520,24 @@ val linuxCrossToolchainAvailable: Boolean by lazy {
 
 val hermesLinuxStaticDir = layout.buildDirectory.dir("hermes-linux-static")
 
+fun Task.requireLinuxCrossToolchain() {
+  doFirst {
+    require(linuxCrossToolchainAvailable) {
+      """
+      Linux cross toolchain not found; it is required to build jni/amd64/libhermesvm.so
+      for the zipline jvm jar. Install it and retry:
+        brew install x86_64-unknown-linux-gnu
+      (or provide x86_64-linux-gnu-gcc on PATH, or set the LINUX_SYSROOT env var)
+      """.trimIndent()
+    }
+  }
+}
+
 val buildHermesLinuxStatic: TaskProvider<Exec> =
   tasks.register<Exec>("buildHermesLinuxStatic") {
-    description = "Cross-build static Hermes libs for Linux x86_64 (skipped without cross-toolchain)"
+    description = "Cross-build static Hermes libs for Linux x86_64"
     group = "build"
-    onlyIf { linuxCrossToolchainAvailable }
+    requireLinuxCrossToolchain()
     dependsOn(preBuildHermesHost)
     inputs.dir(jsEngineRoot)
     inputs.file(linuxToolchainFile)
@@ -484,7 +553,7 @@ val buildHermesLinuxStatic: TaskProvider<Exec> =
       $cmakeBin -S '${jsEngineRoot.absolutePath}' -B '${staticDir.absolutePath}' -G Ninja \
         -DCMAKE_TOOLCHAIN_FILE='${linuxToolchainFile.absolutePath}' \
         -DCMAKE_BUILD_TYPE=MinSizeRel \
-        -DHERMES_ENABLE_DEBUGGER=OFF \
+        -DHERMES_ENABLE_DEBUGGER=ON \
         -DHERMES_ENABLE_INTL=FALSE \
         -DHERMES_UNICODE_LITE=TRUE \
         -DHERMES_ENABLE_TEST_SUITE=OFF \
@@ -500,9 +569,9 @@ val buildHermesLinuxStatic: TaskProvider<Exec> =
 
 val buildHermesHostLinuxX64: TaskProvider<Exec> =
   tasks.register<Exec>("buildHermesHostLinuxX64") {
-    description = "Cross-build host libhermesvm.so (Linux x86_64, skipped without cross-toolchain)"
+    description = "Cross-build host libhermesvm.so (Linux x86_64)"
     group = "build"
-    onlyIf { linuxCrossToolchainAvailable }
+    requireLinuxCrossToolchain()
     dependsOn(buildHermesLinuxStatic)
     inputs.files(hermesGlueInputFiles)
     inputs.files(hermesCmakeInputFiles)
@@ -538,6 +607,31 @@ val stageHermesHostDylibs: TaskProvider<Sync> =
     outputs.dir(projectDir.resolve("src/jvmMain/resources/jni"))
   }
 
+// Defense in depth for publish: if the staged jni resources are ever incomplete
+// (e.g. deleted, or a staging misconfiguration), fail instead of shipping a jvm
+// jar that breaks consumers
+val verifyHermesHostLibsStaged: TaskProvider<Task> =
+  tasks.register("verifyHermesHostLibsStaged") {
+    description = "Verify all host native libraries are staged into jvmMain resources"
+    group = "verification"
+    dependsOn(stageHermesHostDylibs)
+    outputs.upToDateWhen { false }
+    doLast {
+      val jniDir = projectDir.resolve("src/jvmMain/resources/jni")
+      val expected = mapOf(
+        "aarch64" to "libhermesvm.dylib",
+        "x86_64" to "libhermesvm.dylib",
+        "amd64" to "libhermesvm.so",
+      )
+      val missing = expected.filter { (arch, lib) -> !File(jniDir, "$arch/$lib").isFile }
+      check(missing.isEmpty()) {
+        "Missing staged host native libraries: ${missing.values}. " +
+          "Run ./gradlew :zipline:stageHermesHostDylibs on a machine with the macOS SDK " +
+          "and the Linux cross toolchain (x86_64-linux-gnu-gcc or LINUX_SYSROOT) before publishing."
+      }
+    }
+  }
+
 // Build a merged static Hermes+Zipline archive for a single iOS variant.
 // The output libhermesvm.a is embedded in the iOS Kotlin/Native klib.
 //
@@ -564,7 +658,7 @@ fun registerBuildHermesStaticIos(
     inputs.files(hermesGlueInputFiles)
     inputs.files(hermesCmakeInputFiles)
     inputs.file(file("native/hermes-ios.exports"))
-    inputs.property("hermesIosLean", hermesIosLean)
+    inputs.property("hermesProd", hermesProd)
     outputs.file(outputFile)
     val cmakeBin = System.getenv("CMAKE_BIN") ?: "cmake"
     val jobs = Runtime.getRuntime().availableProcessors().toString()
@@ -586,7 +680,8 @@ fun registerBuildHermesStaticIos(
         -DCMAKE_OSX_SYSROOT="${'$'}SDK_PATH" \
         -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
         -DCMAKE_OSX_ARCHITECTURES='$architectures' \
-        -DHERMESVM_LEAN=${if (hermesIosLean) "ON" else "OFF"} \
+        -DHERMESVM_LEAN=${if (hermesProd) "ON" else "OFF"} \
+        -DHERMES_ENABLE_DEBUGGER=${if (hermesProd) "OFF" else "ON"} \
         -DHERMES_IOS_STATIC=ON \
         -DHERMES_SRC='${jsEngineRoot.absolutePath}' \
         -DIMPORT_HOST_COMPILERS='${hermesImportCompilers.absolutePath}'
@@ -678,15 +773,25 @@ tasks.matching { it.name == "jvmJar" || it.name == "jvmProcessResources" }
   .configureEach { dependsOn(stageHermesHostDylibs) }
 
 tasks.matching { it.name == "publishToMavenLocal" || it.name.startsWith("publish") }
-  .configureEach { dependsOn(stageHermesHostDylibs) }
+  .configureEach { dependsOn(verifyHermesHostLibsStaged) }
 
 android {
   namespace = "app.cash.zipline"
   compileSdk = libs.versions.compileSdk.get().toInt()
 
+  buildFeatures {
+    buildConfig = true
+  }
+
   defaultConfig {
     minSdk = libs.versions.minSdk.get().toInt()
     multiDexEnabled = true
+
+    buildConfigField(
+      "String",
+      "hermesLibraryName",
+      "\"${if (hermesProd) "hermesvmlean" else "hermesvm"}\"",
+    )
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     consumerProguardFiles("proguard-rules.pro")
@@ -700,6 +805,10 @@ android {
     // adds our glue on top and links the whole thing into a single .so.
     externalNativeBuild {
       cmake {
+        // Build only the engine variant we package (full by default via
+        // -PhermesProd=false, lean otherwise); the other variant's .so would
+        // otherwise be built and packaged too.
+        targets(if (hermesProd) "hermesvmlean" else "hermesvm")
         arguments(
           "-DANDROID_TOOLCHAIN=clang",
           "-DANDROID_STL=c++_shared",
@@ -709,9 +818,9 @@ android {
           // Pass JAVA_HOME for the JNI include path (on non-Apple; on Android
           // the NDK toolchain's sysroot include dir already has jni.h).
           "-DJAVA_HOME=${javaHome ?: ""}",
-          // Build lean Hermes (no JIT compiler, ~800KB smaller per ABI).
-          // The compile() JNI method will throw UnsupportedOperationException.
-          "-DHERMESVM_LEAN=TRUE",
+          // Pass explicitly: the CMake cache from older builds sticks otherwise.
+          "-DHERMESVM_LEAN=${if (hermesProd) "TRUE" else "FALSE"}",
+          "-DHERMES_ENABLE_DEBUGGER=${if (hermesProd) "OFF" else "ON"}",
         )
         cFlags("-fstrict-aliasing", "-DCONFIG_VERSION=\\\"${jsEngineVersion()}\\\"")
         cppFlags("-fstrict-aliasing", "-DCONFIG_VERSION=\\\"${jsEngineVersion()}\\\"")

@@ -17,7 +17,9 @@
 #include <string>
 
 // Initialize/release a caller-allocated context (returns 1 on success).
-int HermesCore_initContext(ContextBase* ctx);
+// forceEagerCompilation disables lazy compilation (needed for CDP breakpoints
+// to bind in runtime-compiled source).
+int HermesCore_initContext(ContextBase* ctx, bool forceEagerCompilation = false);
 void HermesCore_releaseContext(ContextBase* ctx);
 
 // The single source of the Zipline runtime configuration: hardened Hermes
@@ -25,6 +27,7 @@ void HermesCore_releaseContext(ContextBase* ctx);
 // and the GC settings from HermesCore_makeGCConfig.
 // Platform layers chain .rebuild() to add their own knobs.
 hermes::vm::RuntimeConfig HermesCore_makeRuntimeConfig();
+hermes::vm::RuntimeConfig HermesCore_makeRuntimeConfig(bool forceEagerCompilation);
 
 // The shared GC configuration: 32 MB initial heap, 3 GB max heap, stats
 // recorded (heap stats feed memoryUsage()).
@@ -36,6 +39,14 @@ facebook::jsi::Value HermesCore_evaluateBytecode(ContextBase* ctx,
                                                  const uint8_t* bytecode,
                                                  size_t bytecodeSize,
                                                  const std::string& sourceURL);
+
+// Compile and evaluate JavaScript source directly in the runtime. Unlike
+// compile()+evaluateBytecode(), the in-memory debug info (scoping table,
+// sourceMappingURL magic comment) survives, so CDP frame eval works.
+// Throws jsi::JSError on script errors, std::exception on engine errors.
+facebook::jsi::Value HermesCore_evaluateSource(ContextBase* ctx,
+                                               const char* source,
+                                               const std::string& sourceURL);
 
 extern "C" {
 #endif

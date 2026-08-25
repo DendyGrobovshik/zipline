@@ -114,7 +114,7 @@ public final class app/cash/zipline/loader/ZiplineFile {
 	public final fun copy (ILokio/ByteString;)Lapp/cash/zipline/loader/ZiplineFile;
 	public static synthetic fun copy$default (Lapp/cash/zipline/loader/ZiplineFile;ILokio/ByteString;ILjava/lang/Object;)Lapp/cash/zipline/loader/ZiplineFile;
 	public fun equals (Ljava/lang/Object;)Z
-	public final fun getQuickjsBytecode ()Lokio/ByteString;
+	public final fun getJsBytecode ()Lokio/ByteString;
 	public final fun getZiplineVersion ()I
 	public fun hashCode ()I
 	public final fun toByteString ()Lokio/ByteString;
@@ -123,6 +123,7 @@ public final class app/cash/zipline/loader/ZiplineFile {
 }
 
 public final class app/cash/zipline/loader/ZiplineFile$Companion {
+	public final fun isZiplineFile (Lokio/ByteString;)Z
 	public final fun read (Lokio/BufferedSource;)Lapp/cash/zipline/loader/ZiplineFile;
 	public final fun toZiplineFile (Lokio/ByteString;)Lapp/cash/zipline/loader/ZiplineFile;
 }

@@ -18,8 +18,8 @@ package app.cash.zipline.internal.bridge
 import app.cash.zipline.Call
 import app.cash.zipline.CallResult
 import app.cash.zipline.ZiplineService
-import app.cash.zipline.internal.decodeFromStringFast
-import app.cash.zipline.internal.encodeToStringFast
+import app.cash.zipline.decodeFromStringFast
+import app.cash.zipline.encodeToStringFast
 import kotlinx.serialization.KSerializer
 
 /**

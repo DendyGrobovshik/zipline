@@ -35,7 +35,7 @@ class ZiplineFileTest {
     ziplineFile.writeTo(buffer)
     val decodedZiplineFile = ZiplineFile.read(buffer)
     assertEquals(CURRENT_ZIPLINE_VERSION, decodedZiplineFile.ziplineVersion)
-    assertEquals(bytecode, decodedZiplineFile.quickjsBytecode)
+    assertEquals(bytecode, decodedZiplineFile.jsBytecode)
   }
 
   @Test
@@ -45,7 +45,7 @@ class ZiplineFileTest {
     val buffer = Buffer().write(goldenFile)
     val decodedZiplineFile = ZiplineFile.read(buffer)
     assertEquals(CURRENT_ZIPLINE_VERSION, decodedZiplineFile.ziplineVersion)
-    assertEquals(bytecode, decodedZiplineFile.quickjsBytecode)
+    assertEquals(bytecode, decodedZiplineFile.jsBytecode)
   }
 
   @Test
@@ -61,7 +61,7 @@ class ZiplineFileTest {
     buffer.writeUtf8("hello")
     val decodedZiplineFile = ZiplineFile.read(buffer)
     assertEquals(CURRENT_ZIPLINE_VERSION, decodedZiplineFile.ziplineVersion)
-    assertEquals(bytecode, decodedZiplineFile.quickjsBytecode)
+    assertEquals(bytecode, decodedZiplineFile.jsBytecode)
   }
 
   @Test
@@ -103,7 +103,7 @@ class ZiplineFileTest {
     val e = assertFailsWith<IOException> {
       ZiplineFile.read(buffer)
     }
-    assertEquals("QuickJS bytecode section missing", e.message)
+    assertEquals("JS bytecode section missing", e.message)
   }
 
   @Test

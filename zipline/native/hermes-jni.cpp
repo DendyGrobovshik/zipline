@@ -6,6 +6,7 @@
 #endif
 
 #include "ContextJni.h"
+#include "CdpJni.h"
 #include "JniUtf8.h"
 #include "ExceptionThrowers.h"
 #include "InboundCallChannel.h"
@@ -39,8 +40,9 @@ inline std::string jstringToCppString(JNIEnv* env, jstring javaString) {
 }  // namespace
 
 extern "C" JNIEXPORT jlong JNICALL
-Java_app_cash_zipline_JsEngine_createContext(JNIEnv* env, jclass /*clazz*/) {
-  ContextJni* c = new (std::nothrow) ContextJni(env);
+Java_app_cash_zipline_JsEngine_createContext(JNIEnv* env, jclass /*clazz*/,
+                                             jboolean forceEagerCompilation) {
+  ContextJni* c = new (std::nothrow) ContextJni(env, forceEagerCompilation == JNI_TRUE);
   if (!c) {
     throwJavaException(env, "java/lang/OutOfMemoryError",
                        "Cannot allocate Hermes Context");
@@ -119,6 +121,19 @@ Java_app_cash_zipline_JsEngine_execute(JNIEnv* env, jobject /*thiz*/,
   return ctx->execute(env, bytecode, fileName);
 }
 
+extern "C" JNIEXPORT jobject JNICALL
+Java_app_cash_zipline_JsEngine_evaluate(JNIEnv* env, jobject /*thiz*/,
+                                    jlong _context, jstring source,
+                                    jstring fileName) {
+  ContextJni* ctx = toContext(_context);
+  if (!ctx) {
+    throwJavaException(env, "java/lang/IllegalStateException",
+                       "JsEngine instance was closed");
+    return nullptr;
+  }
+  return ctx->evaluate(env, source, fileName);
+}
+
 extern "C" JNIEXPORT jbyteArray JNICALL
 Java_app_cash_zipline_JsEngine_compile(JNIEnv* env, jobject /*thiz*/,
                                      jlong _context, jstring source,
@@ -171,6 +186,9 @@ Java_app_cash_zipline_JniCallChannel_call(JNIEnv* env, jobject /*thiz*/,
                        "Invalid JavaScript object");
     return nullptr;
   }
+  // Run any pending CDP runtime tasks before calling into JavaScript. We are
+  // on the JS thread here.
+  zipline_cdp::drainTasks(ctx);
   std::string result = channel->call(ctx, jstringToCppString(env, callJson));
   return zipline::utf8ToJniString(env, result);
 }
@@ -338,4 +356,56 @@ Java_app_cash_zipline_JsEngine_installModuleLoader(JNIEnv* env, jobject /*thiz*/
                        error ? error : "installModuleLoader failed");
     free(error);
   }
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_app_cash_zipline_JsEngine_cdpAttach(JNIEnv* env, jobject /*thiz*/,
+                                         jlong _context, jobject listener) {
+  ContextJni* ctx = toContext(_context);
+  if (!ctx) {
+    throwJavaException(env, "java/lang/IllegalStateException",
+                       "JsEngine instance was closed");
+    return JNI_FALSE;
+  }
+  return zipline_cdp::attach(ctx, env, listener) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_app_cash_zipline_JsEngine_cdpHandleCommand(JNIEnv* env, jobject /*thiz*/,
+                                                jlong _context, jstring json) {
+  ContextJni* ctx = toContext(_context);
+  if (!ctx || !json) {
+    return;
+  }
+  zipline_cdp::handleCommand(ctx, jstringToCppString(env, json));
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_app_cash_zipline_JsEngine_cdpDrainTasks(JNIEnv* /*env*/, jobject /*thiz*/,
+                                             jlong _context) {
+  ContextJni* ctx = toContext(_context);
+  if (!ctx) {
+    return;
+  }
+  zipline_cdp::drainTasks(ctx);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_app_cash_zipline_JsEngine_cdpResetAgent(JNIEnv* /*env*/, jobject /*thiz*/,
+                                             jlong _context) {
+  ContextJni* ctx = toContext(_context);
+  if (!ctx) {
+    return;
+  }
+  zipline_cdp::resetAgent(ctx);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_app_cash_zipline_JsEngine_cdpDetach(JNIEnv* /*env*/, jobject /*thiz*/,
+                                         jlong _context) {
+  ContextJni* ctx = toContext(_context);
+  if (!ctx) {
+    return;
+  }
+  zipline_cdp::detach(ctx);
 }

@@ -13,11 +13,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package app.cash.zipline.internal
+package app.cash.zipline
 
+import kotlinx.serialization.DeserializationStrategy
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.json.Json
 
-internal actual fun <T> Json.decodeFromStringFast(deserializer: KSerializer<T>, string: String): T = decodeFromString(deserializer, string)
+/*
+ * In QuickJS (version 2021-03-27) it's faster to ask the JavaScript engine to parse JSON to a
+ * dynamic value (ie. JSON.parse()) and bind that to a Kotlin Objects, than to parse and bind all
+ * in Kotlin/JS. In one sample this optimization reduced overall execution time by 35%.
+ */
 
-internal actual fun <T> Json.encodeToStringFast(serializer: KSerializer<T>, value: T): String = encodeToString(serializer, value)
+public expect fun <T> Json.decodeFromStringFast(deserializer: DeserializationStrategy<T>, string: String): T
+
+public expect fun <T> Json.encodeToStringFast(serializer: KSerializer<T>, value: T): String

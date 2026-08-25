@@ -4,5 +4,9 @@
 # search path is also supplied by build.gradle.kts for the same reason.
 package = app.cash.zipline.hermes
 linkerOpts.linux = -lhermesvm -lpthread -ldl
+# The Kotlin/Native family name for macOS targets is "osx"; "macos" is only
+# kept for tooling that reads def-file keys directly — the final link looks
+# up the family name and would silently drop -lhermesvm otherwise.
+linkerOpts.osx = -lhermesvm -framework Foundation
 linkerOpts.macos = -lhermesvm -framework Foundation
 linkerOpts.ios = -lhermesvm -framework Foundation

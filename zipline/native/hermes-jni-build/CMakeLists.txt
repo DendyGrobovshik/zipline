@@ -74,6 +74,8 @@ set(HERMES_IOS_STATIC OFF CACHE BOOL "Build iOS as a merged static archive")
 set(GLUE_COMMON_SOURCES
   ${HERMES_SRC}/../hermes-core.cpp
   ${HERMES_SRC}/../ContextBase.cpp
+  ${HERMES_SRC}/../CdpSession.cpp
+  ${HERMES_SRC}/../CdpSession.h
   ${HERMES_SRC}/../hermes-ios/hermes-ios.cpp
   ${HERMES_SRC}/../InboundCallChannel.cpp
   ${HERMES_SRC}/../common/JsIntrinsics.cpp
@@ -95,6 +97,8 @@ set(GLUE_CORE_SOURCES
 
 # JNI-specific glue source files (Android only - not needed for iOS/macOS).
 set(GLUE_JNI_SOURCES
+  ${HERMES_SRC}/../CdpJni.cpp
+  ${HERMES_SRC}/../CdpJni.h
   ${HERMES_SRC}/../ContextJni.cpp
   ${HERMES_SRC}/../ContextJni.h
   ${HERMES_SRC}/../OutboundCallChannelJni.cpp
@@ -124,7 +128,18 @@ if(ANDROID)
   set(HERMES_IS_ANDROID TRUE)
   set(ANDROID_STL "c++_shared")
   set(HERMES_ENABLE_TEST_SUITE OFF)
-  set(HERMES_ENABLE_DEBUGGER OFF)
+  # The debugger (incl. the CDP agent in API/hermes/cdp) is enabled so Kotlin/JS
+  # code can be debugged from Chrome DevTools. Lean (prod) builds exclude the JS
+  # parser the debugger needs, so it is disabled there. Gradle passes
+  # -DHERMES_ENABLE_DEBUGGER explicitly based on -PhermesProd; this is the
+  # fallback default when it is not passed.
+  if(NOT DEFINED HERMES_ENABLE_DEBUGGER)
+    if(HERMESVM_LEAN)
+      set(HERMES_ENABLE_DEBUGGER OFF)
+    else()
+      set(HERMES_ENABLE_DEBUGGER ON)
+    endif()
+  endif()
   set(HERMES_ENABLE_TOOLS OFF)
   set(HERMES_ENABLE_INTL FALSE)
   set(HERMES_UNICODE_LITE TRUE)
@@ -173,6 +188,17 @@ if(ANDROID)
       "${_hermes_subdir}/external/boost/boost_1_86_0/libs/context/libboost_context.a")
   endif()
 
+  if(HERMES_ENABLE_DEBUGGER)
+    # Glue sources include AsyncDebuggerAPI.h / CDP headers whose declarations
+    # change based on this define; keep it in sync with the Hermes build.
+    target_compile_definitions(zipline_glue PRIVATE HERMES_ENABLE_DEBUGGER=1)
+    if(HERMESVM_LEAN AND TARGET hermesParser_obj)
+      # The CDP agent (part of hermesapi_obj inside hermesvmlean_a) parses CDP
+      # JSON messages with hermesParser, which lean builds otherwise exclude.
+      target_link_libraries(hermesvmlean PRIVATE hermesParser_obj)
+    endif()
+  endif()
+
   # Set page size for Android Hermes builds
   if(ANDROID)
     set_target_properties(hermesvmlean PROPERTIES
@@ -195,9 +221,6 @@ if(ANDROID)
 
   # Exclude the unused shared lib so only the needed target is built.
   if(HERMESVM_LEAN)
-    if(TARGET hermesvmlean)
-      set_target_properties(hermesvmlean PROPERTIES EXCLUDE_FROM_ALL TRUE)
-    endif()
     if(TARGET hermesvm)
       set_target_properties(hermesvm PROPERTIES EXCLUDE_FROM_ALL TRUE)
     endif()
@@ -205,16 +228,25 @@ if(ANDROID)
     if(TARGET hermesvmlean)
       set_target_properties(hermesvmlean PROPERTIES EXCLUDE_FROM_ALL TRUE)
     endif()
-    if(TARGET hermesvm)
-      set_target_properties(hermesvm PROPERTIES EXCLUDE_FROM_ALL TRUE)
-    endif()
   endif()
 
 elseif(CMAKE_SYSTEM_NAME STREQUAL "iOS")
   # ---- iOS build (device + simulator) ----
   set(HERMES_IS_MOBILE_BUILD TRUE)
   set(HERMES_ENABLE_TEST_SUITE OFF)
-  set(HERMES_ENABLE_DEBUGGER OFF)
+  # The CDP debugger (incl. the CDP agent in API/hermes/cdp) is enabled for
+  # non-lean builds only: lean excludes the JS parser, which the debugger
+  # needs both for Runtime.evaluate and for parsing CDP JSON. CDP debugging
+  # therefore requires the full engine (-PhermesProd=false). Gradle passes
+  # -DHERMES_ENABLE_DEBUGGER explicitly based on -PhermesProd; this is the
+  # fallback default when it is not passed.
+  if(NOT DEFINED HERMES_ENABLE_DEBUGGER)
+    if(HERMESVM_LEAN)
+      set(HERMES_ENABLE_DEBUGGER OFF)
+    else()
+      set(HERMES_ENABLE_DEBUGGER ON)
+    endif()
+  endif()
   set(HERMES_ENABLE_TOOLS OFF)
   set(HERMES_ENABLE_INTL FALSE)
   set(HERMES_UNICODE_LITE TRUE)
@@ -253,6 +285,11 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "iOS")
     "${_hermes_subdir}/external/llvh/include")
   if(HERMESVM_LEAN)
     target_compile_definitions(zipline_ios_glue PRIVATE HERMESVM_LEAN=1)
+  endif()
+  if(HERMES_ENABLE_DEBUGGER)
+    # Glue sources include AsyncDebuggerAPI.h / CDP headers whose declarations
+    # change based on this define; keep it in sync with the Hermes build.
+    target_compile_definitions(zipline_ios_glue PRIVATE HERMES_ENABLE_DEBUGGER=1)
   endif()
 
   if(HERMES_IOS_STATIC)
@@ -343,7 +380,9 @@ elseif(DEFINED HERMES_STATIC_BUILD_DIR)
   # ---- macOS/Linux host build with prebuilt static libs ----
   set(HERMES_BUILD_SHARED_JSI OFF)
   set(HERMES_ENABLE_TEST_SUITE OFF)
-  set(HERMES_ENABLE_DEBUGGER OFF)
+  # Keep in sync with the -DHERMES_ENABLE_DEBUGGER flag used to produce the
+  # prebuilt static libs (see buildHermes*Static Gradle tasks).
+  set(HERMES_ENABLE_DEBUGGER ON)
   set(HERMES_ENABLE_TOOLS OFF)
   set(HERMES_ENABLE_INTL FALSE)
   set(HERMES_UNICODE_LITE TRUE)
@@ -441,6 +480,9 @@ elseif(DEFINED HERMES_STATIC_BUILD_DIR)
   target_include_directories(hermesvm_jni PRIVATE
     ${_GLUE_INCLUDES}
     "${_hermes_subdir}/external/llvh/include")
+  if(HERMES_ENABLE_DEBUGGER)
+    target_compile_definitions(hermesvm_jni PRIVATE HERMES_ENABLE_DEBUGGER=1)
+  endif()
   target_link_libraries(hermesvm_jni PRIVATE
     "-Wl,-force_load,${_THIN_HERMES_VM_A}"
     "-Wl,-force_load,${_THIN_JSI_A}"

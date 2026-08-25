@@ -30,7 +30,15 @@ abstract class ZiplineExtension {
   abstract val apiTracking: Property<Boolean>
 
   /**
-   * True to strip line number information from the encoded QuickJS bytecode in production builds.
+   * TCP port of the CDP (Chrome DevTools Protocol) debug server, e.g. 9222. On Android app
+   * modules the plugin generates an `app.cash.zipline.ZiplineCdpConfig` class with the port
+   * and the engine starts its debug server automatically; attach Chrome with
+   * `adb forward tcp:9222 tcp:9222` + chrome://inspect. Unset by default: no debugging.
+   */
+  abstract val cdpDebugPort: Property<Int>
+
+  /**
+   * True to strip line number information from the encoded JS bytecode in production builds.
    * Line numbers will not be included in stack traces. This is false by default.
    */
   abstract val stripLineNumbers: Property<Boolean>
@@ -47,6 +55,24 @@ abstract class ZiplineExtension {
 
   /** True to forbid the existing Zipline service to be extended with new functions. */
   abstract val forbidServiceExtension: Property<Boolean>
+
+  /**
+   * URL prefix baked into compiled bytecode as each script's URL, e.g. "http://localhost:8080"
+   * (matching [httpServerPort]). When set, the .js sources and .js.map source maps are copied
+   * next to the .zipline files so the development server can serve them to Chrome DevTools,
+   * and the bytecode keeps the debug info needed for CDP debugging (breakpoints, stepping).
+   * Unset by default.
+   */
+  abstract val debugSourceUrlPrefix: Property<String>
+
+  /**
+   * True to serve raw JavaScript instead of Hermes bytecode in .zipline slots,
+   * so the engine compiles on device at runtime. This makes CDP frame
+   * evaluation and scope inspection work (they are impossible with precompiled
+   * bytecode because the scoping info table is never serialized). Requires the
+   * full (non-lean) engine in the app. False by default.
+   */
+  abstract val serveSourceCode: Property<Boolean>
 
   /** True to include source DTO schemas in Zipline API function IDs. */
   abstract val includeSchemaInFunctionIds: Property<Boolean>
