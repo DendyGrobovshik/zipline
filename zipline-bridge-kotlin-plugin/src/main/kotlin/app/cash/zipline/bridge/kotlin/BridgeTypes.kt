@@ -110,12 +110,8 @@ data class FieldInfo(
     } else null
   }
 
-  val arrayElementType: String? by lazy { elementIrType?.classFqName?.asString() }
-
   /** Raw IR type of the element for Array<T>/List<T>; null when unavailable. */
   val arrayElementIrType: IrType? by lazy { elementIrType }
-
-  val arrayElementNullable: Boolean by lazy { (elementIrType as? IrSimpleType)?.isMarkedNullable() ?: false }
 }
 
 /** The [index]-th type argument of [type], if any. */

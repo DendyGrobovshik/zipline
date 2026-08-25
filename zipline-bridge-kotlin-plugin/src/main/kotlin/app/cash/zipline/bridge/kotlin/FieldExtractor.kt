@@ -132,9 +132,3 @@ internal fun isJniPrimitive(ktType: String): Boolean =
 
 internal fun isKnownType(ktType: String): Boolean =
   ktType in kotlinToJniFieldType
-
-internal fun isPrimitiveArray(ktType: String): Boolean =
-  ktType in primitiveArrayJniInfo
-
-internal fun isStringElement(elementType: String?): Boolean =
-  elementType == "kotlin.String"
