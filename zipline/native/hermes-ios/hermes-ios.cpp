@@ -144,6 +144,10 @@ void HermesRuntime_destroy(void* runtime) {
         // Tear down any CDP session before the runtime goes away; the
         // session's agent and debug API reference the runtime.
         zipline_cdp::detach(ctx);
+        if (HermesCore_getRuntime(ctx) != nullptr) {
+            ctx->bridgeHandles.clear();
+            ctx->pendingChanges.clear();
+        }
         HermesCore_releaseContext(ctx);
         delete ctx;
     }
@@ -478,6 +482,7 @@ int HermesContext_initRdmaChangesChannel(void* context) {
                 static_cast<int>(args[1].asNumber()),
                 static_cast<int>(args[2].asNumber()),
                  handle);
+            HermesBridge_freeHandle(context, handle);
             return jsi::Value::undefined();
         });
     rdmaObj.setProperty(rt, "appendPropertyChange", appendPropertyChangeFn);
@@ -494,6 +499,7 @@ int HermesContext_initRdmaChangesChannel(void* context) {
             int handle = static_cast<int>(ctx->bridgeHandles.size());
             ctx->bridgeHandles.push_back(std::make_shared<jsi::Value>(runtime, args[1]));
             ctx->modifierChangeCb(context, static_cast<int>(args[0].asNumber()), handle);
+            HermesBridge_freeHandle(context, handle);
             return jsi::Value::undefined();
         });
     rdmaObj.setProperty(rt, "appendModifierChange", appendModifierChangeFn);
@@ -582,6 +588,7 @@ int HermesContext_initRdmaChangesChannel(void* context) {
             int handle = static_cast<int>(ctx->bridgeHandles.size());
             ctx->bridgeHandles.push_back(std::make_shared<jsi::Value>(runtime, args[1]));
             ctx->bridgeChangeCb(context, static_cast<int>(args[0].asNumber()), handle);
+            HermesBridge_freeHandle(context, handle);
             return jsi::Value::undefined();
         });
     rdmaObj.setProperty(rt, "appendBridgeChange", appendBridgeChangeFn);
@@ -944,33 +951,38 @@ int HermesBridge_getMapEntries(void* context, int mapHandle, int* keysHandleOut,
     jsi::Object map = val->asObject(rt);
 
     try {
-        // Kotlin/JS HashMap exposes its backing hash table via `internalMap`
-        // (mangled get_internalMap_*): keysArray_1, valuesArray_1, presenceArray_1,
-        // length_1. Iterate occupied slots (presence == 1).
-        jsi::Value internalMapFn = bridgeFindMethod(rt, *val, "get_internalMap");
-        if (internalMapFn.isUndefined()) return 0;
-        jsi::Value internalMap = internalMapFn.asObject(rt).asFunction(rt).callWithThis(rt, map);
-        if (!internalMap.isObject()) return 0;
-        jsi::Object table = internalMap.asObject(rt);
+        // Iterate via the public Kotlin/JS Map.entries API (get_entries_ →
+        // iterator_ → hasNext_/next_ → get_key_/get_value_). This works for any
+        // Kotlin/JS Map implementation (HashMap, LinkedHashMap, etc.), unlike the
+        // HashMap-specific internalMap backing table. Mirrors the C bridge.
+        jsi::Value entriesFn = bridgeFindMethod(rt, *val, "get_entries_");
+        if (entriesFn.isUndefined() || !entriesFn.isObject()) return 0;
+        jsi::Value entries = entriesFn.asObject(rt).asFunction(rt).callWithThis(rt, map);
+        if (!entries.isObject()) return 0;
 
-        jsi::Value keysArr = table.getProperty(rt, "keysArray_1");
-        jsi::Value valuesArr = table.getProperty(rt, "valuesArray_1");
-        jsi::Value presenceArr = table.getProperty(rt, "presenceArray_1");
-        jsi::Value lengthVal = table.getProperty(rt, "length_1");
-        if (!keysArr.isObject() || !valuesArr.isObject() || !presenceArr.isObject() || !lengthVal.isNumber()) {
-            return 0;
-        }
-        int length = static_cast<int>(lengthVal.asNumber());
+        jsi::Value iterFn = bridgeFindMethod(rt, entries, "iterator_");
+        if (iterFn.isUndefined() || !iterFn.isObject()) return 0;
+        jsi::Value iterator = iterFn.asObject(rt).asFunction(rt).callWithThis(rt, entries.asObject(rt));
+        if (!iterator.isObject()) return 0;
+
+        jsi::Value hasNextFn = bridgeFindMethod(rt, iterator, "hasNext_");
+        jsi::Value nextFn = bridgeFindMethod(rt, iterator, "next_");
+        if (hasNextFn.isUndefined() || nextFn.isUndefined()) return 0;
 
         std::vector<jsi::Value> keyVec;
         std::vector<jsi::Value> valueVec;
-        keyVec.reserve(length);
-        valueVec.reserve(length);
-        for (int i = 0; i < length; i++) {
-            jsi::Value presence = presenceArr.asObject(rt).getProperty(rt, std::to_string(i).c_str());
-            if (!presence.isNumber() || presence.asNumber() != 1.0) continue;
-            keyVec.emplace_back(keysArr.asObject(rt).getProperty(rt, std::to_string(i).c_str()));
-            valueVec.emplace_back(valuesArr.asObject(rt).getProperty(rt, std::to_string(i).c_str()));
+        while (true) {
+            jsi::Value hn = hasNextFn.asObject(rt).asFunction(rt).callWithThis(rt, iterator.asObject(rt));
+            if (!hn.isBool() || !hn.asBool()) break;
+            jsi::Value entry = nextFn.asObject(rt).asFunction(rt).callWithThis(rt, iterator.asObject(rt));
+            if (!entry.isObject()) break;
+
+            jsi::Value keyFn = bridgeFindMethod(rt, entry, "get_key_");
+            jsi::Value valueFn = bridgeFindMethod(rt, entry, "get_value_");
+            if (keyFn.isUndefined() || valueFn.isUndefined()) break;
+
+            keyVec.emplace_back(keyFn.asObject(rt).asFunction(rt).callWithThis(rt, entry.asObject(rt)));
+            valueVec.emplace_back(valueFn.asObject(rt).asFunction(rt).callWithThis(rt, entry.asObject(rt)));
         }
 
         jsi::Array keys = jsi::Array(rt, keyVec.size());

@@ -55,41 +55,76 @@ void register_all(facebook::jsi::Runtime& rt);
 }
 #endif
 
-// -- Hermes JSI compatibility layer (emulates QuickJS C API) --
+// -- JSI value helpers (explicit runtime; no macros, no hidden context) --
+
 // JS tag enum (ordered to match common checks)
 enum {
-  JTAG_INT = 0, JTAG_BOOL = 1, JTAG_NULL = 2, JTAG_UNDEFINED = 3,
-  JTAG_STRING = 4, JTAG_OBJECT = 5, JTAG_FLOAT64 = 7
+  JS_TAG_INT = 0, JS_TAG_BOOL = 1, JS_TAG_NULL = 2, JS_TAG_UNDEFINED = 3,
+  JS_TAG_STRING = 4, JS_TAG_OBJECT = 5, JS_TAG_FLOAT64 = 7
 };
-#define JS_TAG_INT JTAG_INT
-#define JS_TAG_BOOL JTAG_BOOL
-#define JS_TAG_NULL JTAG_NULL
-#define JS_TAG_UNDEFINED JTAG_UNDEFINED
-#define JS_TAG_STRING JTAG_STRING
-#define JS_TAG_OBJECT JTAG_OBJECT
-#define JS_TAG_FLOAT64 JTAG_FLOAT64
 
 // Tag emulation: maps jsi::Value to a numeric tag
 static inline int jsi_value_tag(jsi::Runtime &rt, const jsi::Value &v) {
   if (v.isNumber()) {
     double d = v.asNumber();
     if (std::trunc(d) == d && d >= -2147483648.0 && d <= 2147483647.0)
-      return JTAG_INT;
-    return JTAG_FLOAT64;
+      return JS_TAG_INT;
+    return JS_TAG_FLOAT64;
   }
-  if (v.isBool())   return JTAG_BOOL;
-  if (v.isNull())   return JTAG_NULL;
-  if (v.isUndefined()) return JTAG_UNDEFINED;
-  if (v.isString()) return JTAG_STRING;
-  if (v.isObject()) return JTAG_OBJECT;
+  if (v.isBool())   return JS_TAG_BOOL;
+  if (v.isNull())   return JS_TAG_NULL;
+  if (v.isUndefined()) return JS_TAG_UNDEFINED;
+  if (v.isString()) return JS_TAG_STRING;
+  if (v.isObject()) return JS_TAG_OBJECT;
   return -1;
 }
 
-// Thread-local string buffer (emulates JS_ToCString/JS_FreeCString)
-static inline const char* jsi_to_cstring(jsi::Runtime &rt, const jsi::Value &v) {
-  static thread_local std::string buf;
-  buf = v.asString(rt).utf8(rt);
-  return buf.c_str();
+// Primitive value accessors (no runtime required).
+static inline jint jsi_value_get_int(const jsi::Value &v) {
+  return static_cast<jint>(v.asNumber());
+}
+
+static inline jdouble jsi_value_get_float64(const jsi::Value &v) {
+  return static_cast<jdouble>(v.asNumber());
+}
+
+static inline jboolean jsi_value_get_bool(const jsi::Value &v) {
+  return static_cast<jboolean>(v.asBool());
+}
+
+// Property access (explicit runtime).
+static inline jsi::Value jsi_get_property(jsi::Runtime &rt, const jsi::Value &obj, const char *name) {
+  return obj.asObject(rt).getProperty(rt, name);
+}
+
+// Find the first property on the object (walking its prototype chain) whose
+// name starts with [prefix] and that is a callable function. Used to discover
+// Kotlin/JS mangled accessors. Non-function properties that match the prefix
+// (e.g. backing fields) are skipped, so callers can safely call asFunction()
+// on the result.
+static inline jsi::Value jsi_find_method(jsi::Runtime &rt, const jsi::Value &obj, const char *prefix) {
+  if (!obj.isObject()) return jsi::Value::undefined();
+  jsi::Object o = obj.asObject(rt);
+  jsi::Value ctor = o.getProperty(rt, "constructor");
+  if (!ctor.isObject()) return jsi::Value::undefined();
+  jsi::Value proto = ctor.asObject(rt).getProperty(rt, "prototype");
+  while (proto.isObject()) {
+    jsi::Array names = proto.asObject(rt).getPropertyNames(rt);
+    size_t n = names.length(rt);
+    for (size_t i = 0; i < n; i++) {
+      jsi::Value nm = names.getValueAtIndex(rt, i);
+      if (!nm.isString()) continue;
+      std::string name = nm.asString(rt).utf8(rt);
+      if (strncmp(name.c_str(), prefix, strlen(prefix)) == 0) {
+        jsi::Value candidate = o.getProperty(rt, name.c_str());
+        if (candidate.isObject() && candidate.asObject(rt).isFunction(rt)) {
+          return candidate;
+        }
+      }
+    }
+    proto = proto.asObject(rt).getProperty(rt, "__proto__");
+  }
+  return jsi::Value::undefined();
 }
 
 // Reconstruct 64-bit pointer from two 32-bit halves stored as JS doubles.
@@ -126,7 +161,7 @@ static inline jobject jsi_value_to_boxed(JNIEnv *env, jsi::Runtime &rt, const js
     return env->NewObject(c, m, (jdouble)d);
   }
   if (v.isString()) {
-    return env->NewStringUTF(jsi_to_cstring(rt, v));
+    return env->NewStringUTF(v.asString(rt).utf8(rt).c_str());
   }
   if (v.isObject()) {
     intptr_t ptr = jsi_get_bridge_dispatch(rt, v);
@@ -148,27 +183,5 @@ static inline jobject jsi_value_to_boxed(JNIEnv *env, jsi::Runtime &rt, const js
   }
   return nullptr;
 }
-
-typedef jsi::Value JSValue;
-
-#define JS_VALUE_GET_NORM_TAG(v) jsi_value_tag(rt, (v))
-#define JS_VALUE_GET_INT(v)      (static_cast<jint>((v).asNumber()))
-#define JS_VALUE_GET_FLOAT64(v)  (static_cast<jdouble>((v).asNumber()))
-#define JS_VALUE_GET_BOOL(v)     (static_cast<jboolean>((v).asBool()))
-
-#define JS_GetPropertyStr(c, obj, name)    ((obj).asObject(rt).getProperty(rt, name))
-#define JS_GetPropertyUint32(c, arr, i)    ((arr).asObject(rt).getProperty(rt, std::to_string(i).c_str()))
-#define JS_ToCString(c, v)                 jsi_to_cstring(rt, (v))
-#define JS_FreeCString(c, s)               ((void)0)
-
-#define JS_Undefined()                     jsi::Value::undefined()
-#define JS_IsUndefined(v)                  ((v).isUndefined())
-#define JS_IsNull(v)                       ((v).isNull())
-#define JS_IsArray(c, v)                   ((v).isObject() && (v).asObject(rt).isArray(rt))
-
-#define JS_FreeValue(c, v)                 ((void)0)
-#define JS_DupValue(c, v)                  jsi::Value(rt, (v))
-#define JS_NewFloat64(c, d)                jsi::Value((d))
-#define js_malloc(c, sz)                   std::malloc(sz)
 
 #endif

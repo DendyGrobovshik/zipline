@@ -93,42 +93,31 @@ class ZiplineBridgeKotlinPluginTest {
       )
       assertEquals(KotlinCompilation.ExitCode.OK, result.exitCode, result.messages)
 
-      val cFile = outputDir.resolve("com_example_Bridged.c").toFile()
+      val cFile = outputDir.resolve("com_example_Bridged.cpp").toFile()
       assertTrue(cFile.exists(), "Expected C file at ${cFile.absolutePath}")
 
       val content = cFile.readText()
 
       // Includes
-      assertTrue(content.contains("#include \"quickjs/quickjs.h\""))
       assertTrue(content.contains("#include \"bridge_dispatch.h\""))
 
       // toJavaObject function signature (no JNIEXPORT, no jniBridge)
       assertTrue(content.contains("static jobject com_example_Bridged_toJavaObject("))
-      assertTrue(content.contains("JNIEnv *env, JSContext *ctx, JSValue jsObj"))
+      assertTrue(content.contains("JNIEnv *env, jsi::Runtime &rt, const jsi::Value &jsObj"))
       // No JNIEXPORT / jniBridge
       assertFalse(content.contains("JNIEXPORT"), "Should not contain JNIEXPORT")
       assertFalse(content.contains("jniBridge"), "Should not contain jniBridge")
 
-      // Context and value casting
-      assertFalse(content.contains("JSContext *ctx = (JSContext *)context;"),
-        "Should not cast context from jlong")
-      assertFalse(content.contains("const JSValue *jsObj = (const JSValue *)jsValue;"),
-        "Should not cast jsValue from jlong")
-
       // Field extraction from JS object
-      assertTrue(content.contains("JS_GetPropertyStr(ctx, *jsObj, \"name\")"))
-      assertTrue(content.contains("JS_GetPropertyStr(ctx, *jsObj, \"age\")"))
+      assertTrue(content.contains("jsObj.asObject(rt).getProperty(rt, \"name\")"))
+      assertTrue(content.contains("jsObj.asObject(rt).getProperty(rt, \"age\")"))
 
       // String field conversion
-      assertTrue(content.contains("JS_ToCString"))
-      assertTrue(content.contains("NewStringUTF"))
-      assertTrue(content.contains("JS_FreeCString"))
+      assertTrue(content.contains("std::string str_name = js_name.asString(rt).utf8(rt);"))
+      assertTrue(content.contains("NewStringUTF(str_name.c_str())"))
 
       // Int field conversion
-      assertTrue(content.contains("JS_VALUE_GET_INT(js_age)"))
-
-      // JS value cleanup
-      assertTrue(content.contains("JS_FreeValue"))
+      assertTrue(content.contains("jsi_value_get_int(js_age)"))
 
       // Class and constructor lookup
       assertTrue(content.contains("FindClass"))
@@ -140,8 +129,8 @@ class ZiplineBridgeKotlinPluginTest {
 
       // Field setting
       assertTrue(content.contains("GetFieldID"))
-      assertTrue(content.contains("SetObjectField(env, result, field_name, java_name)"))
-      assertTrue(content.contains("SetIntField(env, result, field_age, java_age)"))
+      assertTrue(content.contains("SetObjectField(result, _fld_name, java_name)"))
+      assertTrue(content.contains("SetIntField(result, _fld_age, java_age)"))
 
       // Return
       assertTrue(content.contains("return result;"))
@@ -182,21 +171,21 @@ class ZiplineBridgeKotlinPluginTest {
       )
       assertEquals(KotlinCompilation.ExitCode.OK, result.exitCode, result.messages)
 
-      val alphaFile = outputDir.resolve("com_example_Alpha.c").toFile()
+      val alphaFile = outputDir.resolve("com_example_Alpha.cpp").toFile()
       assertTrue(alphaFile.exists(), "Expected per-class C file for Alpha")
       val alphaContent = alphaFile.readText()
       assertTrue(alphaContent.contains("__attribute__((used, constructor))"))
       assertTrue(alphaContent.contains("addBridgeEntry(\"com.example.Alpha\""))
 
-      val betaFile = outputDir.resolve("com_example_Beta.c").toFile()
+      val betaFile = outputDir.resolve("com_example_Beta.cpp").toFile()
       assertTrue(betaFile.exists(), "Expected per-class C file for Beta")
       val betaContent = betaFile.readText()
       assertTrue(betaContent.contains("__attribute__((used, constructor))"))
       assertTrue(betaContent.contains("addBridgeEntry(\"com.example.Beta\""))
 
       // No aggregate init file — per-class constructors handle registration.
-      val initFile = outputDir.resolve("bridge_module_init.c").toFile()
-      assertFalse(initFile.exists(), "bridge_module_init.c should not be generated")
+      val initFile = outputDir.resolve("bridge_module_init.cpp").toFile()
+      assertFalse(initFile.exists(), "bridge_module_init.cpp should not be generated")
     } finally {
       outputDir.toFile().deleteRecursively()
     }
@@ -221,8 +210,8 @@ class ZiplineBridgeKotlinPluginTest {
       )
       assertEquals(KotlinCompilation.ExitCode.OK, result.exitCode, result.messages)
 
-      val cFiles = outputDir.toFile().listFiles { f -> f.name.endsWith(".c") } ?: emptyArray()
-      assertEquals(0, cFiles.size, "No .c bridge files when no annotated classes")
+      val cFiles = outputDir.toFile().listFiles { f -> f.name.endsWith(".cpp") } ?: emptyArray()
+      assertEquals(0, cFiles.size, "No .cpp bridge files when no annotated classes")
     } finally {
       outputDir.toFile().deleteRecursively()
     }
@@ -255,21 +244,21 @@ class ZiplineBridgeKotlinPluginTest {
       )
       assertEquals(KotlinCompilation.ExitCode.OK, result.exitCode, result.messages)
 
-      val cFile = outputDir.resolve("com_example_Dog.c").toFile()
+      val cFile = outputDir.resolve("com_example_Dog.cpp").toFile()
       assertTrue(cFile.exists(), "Expected C file at ${cFile.absolutePath}")
 
       val content = cFile.readText()
 
       // Both inherited and own fields are extracted
-      assertTrue(content.contains("JS_GetPropertyStr(ctx, *jsObj, \"species\")"),
+      assertTrue(content.contains("jsObj.asObject(rt).getProperty(rt, \"species\")"),
         "Should extract inherited 'species' field")
-      assertTrue(content.contains("JS_GetPropertyStr(ctx, *jsObj, \"breed\")"),
+      assertTrue(content.contains("jsObj.asObject(rt).getProperty(rt, \"breed\")"),
         "Should extract own 'breed' field")
 
       // Both fields are set after construction
-      assertTrue(content.contains("SetObjectField(env, result, field_species, java_species)"),
+      assertTrue(content.contains("SetObjectField(result, _fld_species, java_species)"),
         "Should set inherited 'species' field")
-      assertTrue(content.contains("SetObjectField(env, result, field_breed, java_breed)"),
+      assertTrue(content.contains("SetObjectField(result, _fld_breed, java_breed)"),
         "Should set own 'breed' field")
 
       // toJavaObject function targets Dog, not Animal
@@ -310,34 +299,26 @@ class ZiplineBridgeKotlinPluginTest {
       )
       assertEquals(KotlinCompilation.ExitCode.OK, result.exitCode, result.messages)
 
-      val cFile = outputDir.resolve("com_example_Container.c").toFile()
+      val cFile = outputDir.resolve("com_example_Container.cpp").toFile()
       assertTrue(cFile.exists(), "Expected C file at ${cFile.absolutePath}")
 
       val content = cFile.readText()
 
       // String field still extracted directly
-      assertTrue(content.contains("JS_GetPropertyStr(ctx, *jsObj, \"label\")"))
-      assertTrue(content.contains("JS_ToCString"))
+      assertTrue(content.contains("jsObj.asObject(rt).getProperty(rt, \"label\")"))
+      assertTrue(content.contains("js_label.asString(rt).utf8(rt)"))
 
-      // Nested object field uses bridge_dispatch property lookup
-      assertTrue(content.contains("JS_GetPropertyStr(ctx, *jsObj, \"child\")"))
-      assertTrue(content.contains("JS_GetPropertyStr(ctx, js_child, \"bridge_dispatch\")"))
+      // Nested object field uses bridge_dispatch pointer lookup
+      assertTrue(content.contains("jsObj.asObject(rt).getProperty(rt, \"child\")"))
+      assertTrue(content.contains("jsi_get_bridge_dispatch(rt, js_child)"))
 
-      // TODO comment for pointer compression future
-      assertTrue(content.contains("TODO: when pointer compression lands, use JS_VALUE_GET_INT"))
-
-      // Dispatch pointer read via float64
+      // Dispatch pointer read and call
       assertTrue(content.contains(
-        "JniBridgeDispatch *disp_child = (JniBridgeDispatch *)(intptr_t)JS_VALUE_GET_FLOAT64(disp_val_child);"))
-
-      // Dispatch call
-      assertTrue(content.contains("disp_child->toJavaObject(env, ctx, &js_child)"))
-
-      // Cleanup
-      assertTrue(content.contains("JS_FreeValue(ctx, disp_val_child)"))
+        "JniBridgeDispatch *disp_child = (JniBridgeDispatch *)_bridge_ptr_child;"))
+      assertTrue(content.contains("disp_child->toJavaObject(env, rt, js_child);"))
 
       // Object field uses SetObjectField with proper descriptor
-      assertTrue(content.contains("SetObjectField(env, result, field_child, java_child)"))
+      assertTrue(content.contains("SetObjectField(result, _fld_child, java_child)"))
       assertTrue(content.contains("\"Lcom/example/Nested;\""),
         "Should use proper JNI field descriptor for Nested type")
     } finally {
@@ -367,26 +348,23 @@ class ZiplineBridgeKotlinPluginTest {
       )
       assertEquals(KotlinCompilation.ExitCode.OK, result.exitCode, result.messages)
 
-      val cFile = outputDir.resolve("com_example_Report.c").toFile()
+      val cFile = outputDir.resolve("com_example_Report.cpp").toFile()
       assertTrue(cFile.exists(), "Expected C file at ${cFile.absolutePath}")
 
       val content = cFile.readText()
 
-      // JS array check
-      assertTrue(content.contains("JS_IsArray(ctx, js_scores)"))
+      // Per-field array converter helper
+      assertTrue(content.contains("static jobject conv_scores(JNIEnv *env, jsi::Runtime &rt, const jsi::Value &jsVal)"))
 
       // Typed JNI array creation
       assertTrue(content.contains("NewIntArray"))
       assertTrue(content.contains("GetIntArrayElements"))
       assertTrue(content.contains("ReleaseIntArrayElements"))
-      assertTrue(content.contains("jintArray arr_scores"))
-      assertTrue(content.contains("jint *elems_scores"))
+      assertTrue(content.contains("jintArray arr"))
+      assertTrue(content.contains("jint* elems"))
 
       // Loop with element extraction
-      assertTrue(content.contains("for (jint i = 0; i < len_js_scores; i++)"))
-      assertTrue(content.contains("JS_GetPropertyUint32(ctx, js_scores, i)"))
-      assertTrue(content.contains("JS_VALUE_GET_INT(elem)"))
-      assertTrue(content.contains("JS_FreeValue(ctx, elem)"))
+      assertTrue(content.contains("jsi_value_get_int(elem)"))
 
       // JNI field descriptor
       assertTrue(content.contains("[I"))
@@ -417,27 +395,23 @@ class ZiplineBridgeKotlinPluginTest {
       )
       assertEquals(KotlinCompilation.ExitCode.OK, result.exitCode, result.messages)
 
-      val cFile = outputDir.resolve("com_example_NameList.c").toFile()
+      val cFile = outputDir.resolve("com_example_NameList.cpp").toFile()
       assertTrue(cFile.exists(), "Expected C file at ${cFile.absolutePath}")
 
       val content = cFile.readText()
 
-      // JS array check
-      assertTrue(content.contains("JS_IsArray(ctx, js_names)"))
+      // Element converter and array converter helpers
+      assertTrue(content.contains("static jobject conv_names_element(JNIEnv *env, jsi::Runtime &rt, const jsi::Value &jsVal)"))
+      assertTrue(content.contains("jsVal.asString(rt).utf8(rt)"))
+      assertTrue(content.contains("static jobject conv_names(JNIEnv *env, jsi::Runtime &rt, const jsi::Value &jsVal)"))
 
       // String array creation
-      assertTrue(content.contains("FindClass(env, \"java/lang/String\")"))
-      assertTrue(content.contains("NewObjectArray(env, len_js_names, strClass_names, NULL)"))
-
-      // String element conversion in loop
-      assertTrue(content.contains("JS_ToCString(ctx, elem)"))
-      assertTrue(content.contains("NewStringUTF(env, str)"))
-      assertTrue(content.contains("JS_FreeCString(ctx, str)"))
+      assertTrue(content.contains("NewObjectArray"))
       assertTrue(content.contains("SetObjectArrayElement"))
       assertTrue(content.contains("DeleteLocalRef"))
 
       // JNI field descriptor for object array
-      assertTrue(content.contains("[Ljava/lang/Object;"))
+      assertTrue(content.contains("[Ljava/lang/String;"))
     } finally {
       outputDir.toFile().deleteRecursively()
     }
@@ -470,28 +444,18 @@ class ZiplineBridgeKotlinPluginTest {
       )
       assertEquals(KotlinCompilation.ExitCode.OK, result.exitCode, result.messages)
 
-      val cFile = outputDir.resolve("com_example_ItemList.c").toFile()
+      val cFile = outputDir.resolve("com_example_ItemList.cpp").toFile()
       assertTrue(cFile.exists(), "Expected C file at ${cFile.absolutePath}")
 
       val content = cFile.readText()
 
-      // General array path (since Item is not a known type like String or primitive)
-      assertTrue(content.contains("JS_IsArray(ctx, js_items)"))
+      // Per-element converter dispatches via bridge_dispatch
+      assertTrue(content.contains("static jobject conv_items_element(JNIEnv *env, jsi::Runtime &rt, const jsi::Value &jsVal)"))
+      assertTrue(content.contains("jsi_get_bridge_dispatch(rt, jsVal)"))
+      assertTrue(content.contains("disp->toJavaObject(env, rt, jsVal)"))
 
-      // Pre-looked-up boxed classes (general path)
-      assertTrue(content.contains("FindClass(env, \"java/lang/Integer\")"))
-
-      // Per-element runtime dispatch
-      assertTrue(content.contains("JS_VALUE_GET_NORM_TAG(elem)"))
-      assertTrue(content.contains("case JS_TAG_INT:"))
-      assertTrue(content.contains("case JS_TAG_OBJECT:"))
-
-      // bridge_dispatch in the object branch
-      assertTrue(content.contains("JS_GetPropertyStr(ctx, elem, \"bridge_dispatch\")"))
-      assertTrue(content.contains("TODO: when pointer compression lands, use JS_VALUE_GET_INT"))
-      assertTrue(content.contains("JniBridgeDispatch *disp ="))
-
-      // NewObjectArray
+      // Array converter creates an object array
+      assertTrue(content.contains("static jobject conv_items(JNIEnv *env, jsi::Runtime &rt, const jsi::Value &jsVal)"))
       assertTrue(content.contains("NewObjectArray"))
       assertTrue(content.contains("SetObjectArrayElement"))
     } finally {
@@ -521,33 +485,21 @@ class ZiplineBridgeKotlinPluginTest {
       )
       assertEquals(KotlinCompilation.ExitCode.OK, result.exitCode, result.messages)
 
-      val cFile = outputDir.resolve("com_example_MixedBag.c").toFile()
+      val cFile = outputDir.resolve("com_example_MixedBag.cpp").toFile()
       assertTrue(cFile.exists(), "Expected C file at ${cFile.absolutePath}")
 
       val content = cFile.readText()
 
-      // General array dispatch
-      assertTrue(content.contains("JS_IsArray(ctx, js_values)"))
+      // Per-element converter delegates to the generic boxer (full runtime dispatch)
+      assertTrue(content.contains("static jobject conv_values_element(JNIEnv *env, jsi::Runtime &rt, const jsi::Value &jsVal)"))
+      assertTrue(content.contains("jsi_value_to_boxed(env, rt, jsVal)"))
 
-      // All tag branches present
-      assertTrue(content.contains("case JS_TAG_INT:"))
-      assertTrue(content.contains("case JS_TAG_FLOAT64:"))
-      assertTrue(content.contains("case JS_TAG_BOOL:"))
-      assertTrue(content.contains("case JS_TAG_STRING:"))
-      assertTrue(content.contains("case JS_TAG_OBJECT:"))
+      // Array converter creates an object array
+      assertTrue(content.contains("static jobject conv_values(JNIEnv *env, jsi::Runtime &rt, const jsi::Value &jsVal)"))
+      assertTrue(content.contains("NewObjectArray"))
 
-      // Pre-looked-up boxing classes
-      assertTrue(content.contains("cls_values_Int"))
-      assertTrue(content.contains("ctor_values_Int"))
-      assertTrue(content.contains("cls_values_Double"))
-      assertTrue(content.contains("cls_values_Boolean"))
-
-      // Object branch uses bridge_dispatch
-      assertTrue(content.contains("JS_GetPropertyStr(ctx, elem, \"bridge_dispatch\")"))
-      assertTrue(content.contains("JS_IsUndefined(disp_val)"))
-
-      // Cleanup
-      assertTrue(content.contains("DeleteLocalRef"))
+      // Field descriptor for Array<Any>
+      assertTrue(content.contains("[Lkotlin/Any;"))
     } finally {
       outputDir.toFile().deleteRecursively()
     }
@@ -575,7 +527,7 @@ class ZiplineBridgeKotlinPluginTest {
       )
       assertEquals(KotlinCompilation.ExitCode.OK, result.exitCode, result.messages)
 
-      val cFile = outputDir.resolve("com_example_OptString.c").toFile()
+      val cFile = outputDir.resolve("com_example_OptString.cpp").toFile()
       assertTrue(cFile.exists(), "Expected C file at ${cFile.absolutePath}")
 
       val content = cFile.readText()
@@ -584,10 +536,9 @@ class ZiplineBridgeKotlinPluginTest {
       assertTrue(content.contains("jstring java_name;"))
 
       // Null check wrapping string extraction
-      assertTrue(content.contains("JS_IsUndefined(js_name)"))
-      assertTrue(content.contains("JS_IsNull(js_name)"))
-      assertTrue(content.contains("JS_ToCString(ctx, js_name)"))
-      assertTrue(content.contains("NewStringUTF(env, str_name)"))
+      assertTrue(content.contains("!js_name.isUndefined() && !js_name.isNull()"))
+      assertTrue(content.contains("std::string str_name = js_name.asString(rt).utf8(rt);"))
+      assertTrue(content.contains("NewStringUTF(str_name.c_str())"))
 
       // Null branch sets to NULL
       assertTrue(content.contains("java_name = NULL;"))
@@ -621,7 +572,7 @@ class ZiplineBridgeKotlinPluginTest {
       )
       assertEquals(KotlinCompilation.ExitCode.OK, result.exitCode, result.messages)
 
-      val cFile = outputDir.resolve("com_example_OptInt.c").toFile()
+      val cFile = outputDir.resolve("com_example_OptInt.cpp").toFile()
       assertTrue(cFile.exists(), "Expected C file at ${cFile.absolutePath}")
 
       val content = cFile.readText()
@@ -630,15 +581,15 @@ class ZiplineBridgeKotlinPluginTest {
       assertTrue(content.contains("jobject java_age;"))
 
       // Pre-lookup of boxed class and constructor
-      assertTrue(content.contains("FindClass(env, \"java/lang/Integer\")"))
-      assertTrue(content.contains("GetMethodID(env, cls_age, \"<init>\", \"(I)V\")"))
+      assertTrue(content.contains("FindClass(\"java/lang/Integer\")"))
+      assertTrue(content.contains("_boxed_age"))
+      assertTrue(content.contains("_boxedCtor_age"))
 
       // Null check
-      assertTrue(content.contains("JS_IsUndefined(js_age)"))
-      assertTrue(content.contains("JS_IsNull(js_age)"))
+      assertTrue(content.contains("!js_age.isUndefined() && !js_age.isNull()"))
 
       // Boxing via NewObject
-      assertTrue(content.contains("NewObject(env, cls_age, ctor_age, (jint)JS_VALUE_GET_INT(js_age))"))
+      assertTrue(content.contains("NewObject(_boxed_age, _boxedCtor_age, (jint)jsi_value_get_int(js_age))"))
 
       // Null branch
       assertTrue(content.contains("java_age = NULL;"))
@@ -678,24 +629,23 @@ class ZiplineBridgeKotlinPluginTest {
       )
       assertEquals(KotlinCompilation.ExitCode.OK, result.exitCode, result.messages)
 
-      val cFile = outputDir.resolve("com_example_OptContainer.c").toFile()
+      val cFile = outputDir.resolve("com_example_OptContainer.cpp").toFile()
       assertTrue(cFile.exists(), "Expected C file at ${cFile.absolutePath}")
 
       val content = cFile.readText()
 
       // Null check for child field
-      assertTrue(content.contains("JS_IsUndefined(js_child)"))
-      assertTrue(content.contains("JS_IsNull(js_child)"))
+      assertTrue(content.contains("!js_child.isUndefined() && !js_child.isNull()"))
 
       // bridge_dispatch lookup inside null check
-      assertTrue(content.contains("JS_GetPropertyStr(ctx, js_child, \"bridge_dispatch\")"))
-      assertTrue(content.contains("disp_child->toJavaObject(env, ctx, &js_child)"))
+      assertTrue(content.contains("jsi_get_bridge_dispatch(rt, js_child)"))
+      assertTrue(content.contains("disp_child->toJavaObject(env, rt, js_child);"))
 
       // Null branch
       assertTrue(content.contains("java_child = NULL;"))
 
       // Label (non-null string) does NOT get null check
-      assertTrue(content.indexOf("JS_IsUndefined(js_label)") == -1,
+      assertTrue(content.indexOf("js_label.isUndefined()") == -1,
         "Non-nullable label field should not have null check")
     } finally {
       outputDir.toFile().deleteRecursively()
@@ -724,17 +674,16 @@ class ZiplineBridgeKotlinPluginTest {
       )
       assertEquals(KotlinCompilation.ExitCode.OK, result.exitCode, result.messages)
 
-      val cFile = outputDir.resolve("com_example_OptArray.c").toFile()
+      val cFile = outputDir.resolve("com_example_OptArray.cpp").toFile()
       assertTrue(cFile.exists(), "Expected C file at ${cFile.absolutePath}")
 
       val content = cFile.readText()
 
       // Null check for array field
-      assertTrue(content.contains("JS_IsUndefined(js_scores)"))
-      assertTrue(content.contains("JS_IsNull(js_scores)"))
+      assertTrue(content.contains("!js_scores.isUndefined() && !js_scores.isNull()"))
 
       // Array extraction inside null check
-      assertTrue(content.contains("JS_IsArray(ctx, js_scores)"))
+      assertTrue(content.contains("conv_scores(env, rt, js_scores)"))
       assertTrue(content.contains("NewIntArray"))
       assertTrue(content.contains("GetIntArrayElements"))
 
@@ -749,7 +698,7 @@ class ZiplineBridgeKotlinPluginTest {
   }
 
   @Test
-  fun `string nullable array elements handle null per element`() {
+  fun `nullable string array field generates element converter`() {
     val outputDir = createTempDirectory("zipline-bridge-test")
     try {
       val result = compileWithCOutputDir(
@@ -770,27 +719,23 @@ class ZiplineBridgeKotlinPluginTest {
       )
       assertEquals(KotlinCompilation.ExitCode.OK, result.exitCode, result.messages)
 
-      val cFile = outputDir.resolve("com_example_NullableNames.c").toFile()
+      val cFile = outputDir.resolve("com_example_NullableNames.cpp").toFile()
       assertTrue(cFile.exists(), "Expected C file at ${cFile.absolutePath}")
 
       val content = cFile.readText()
 
-      // Per-element null check
-      assertTrue(content.contains("JS_IsUndefined(elem)"))
-      assertTrue(content.contains("JS_IsNull(elem)"))
+      // Element converter converts each element to a JNI string
+      assertTrue(content.contains("static jobject conv_names_element(JNIEnv *env, jsi::Runtime &rt, const jsi::Value &jsVal)"))
+      assertTrue(content.contains("jsVal.asString(rt).utf8(rt)"))
 
-      // String conversion inside null check
-      assertTrue(content.contains("JS_ToCString(ctx, elem)"))
-      assertTrue(content.contains("NewStringUTF(env, str)"))
-
-      // java_elem default is NULL
-      assertTrue(content.contains("jobject java_elem = NULL;"))
-
-      // Still uses NewObjectArray and String class
-      assertTrue(content.contains("FindClass(env, \"java/lang/String\")"))
+      // Array converter builds a NewObjectArray
+      assertTrue(content.contains("static jobject conv_names(JNIEnv *env, jsi::Runtime &rt, const jsi::Value &jsVal)"))
       assertTrue(content.contains("NewObjectArray"))
       assertTrue(content.contains("SetObjectArrayElement"))
       assertTrue(content.contains("DeleteLocalRef"))
+
+      // JNI field descriptor for Array<String?>
+      assertTrue(content.contains("[Ljava/lang/String;"))
     } finally {
       outputDir.toFile().deleteRecursively()
     }

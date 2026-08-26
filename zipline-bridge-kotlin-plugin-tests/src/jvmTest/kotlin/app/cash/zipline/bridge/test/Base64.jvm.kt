@@ -13,5 +13,5 @@ internal fun decodeGuestModule(encoded: String): ByteArray {
   val container = app.cash.zipline.loader.ZiplineFile.read(
     okio.Buffer().write(decodeGuestBase64(encoded)),
   )
-  return container.quickjsBytecode.toByteArray()
+  return container.jsBytecode.toByteArray()
 }

@@ -251,25 +251,25 @@ val arrayKotlinTypes = setOf(
 )
 
 val primitiveArrayJniInfo = mapOf(
-  "kotlin.BooleanArray" to PrimitiveArrayJniInfo("jboolean", "NewBooleanArray", "GetBooleanArrayElements", "ReleaseBooleanArrayElements", "JS_VALUE_GET_BOOL", "(jboolean)"),
-  "kotlin.ByteArray" to PrimitiveArrayJniInfo("jbyte", "NewByteArray", "GetByteArrayElements", "ReleaseByteArrayElements", "JS_VALUE_GET_INT", "(jbyte)"),
-  "kotlin.CharArray" to PrimitiveArrayJniInfo("jchar", "NewCharArray", "GetCharArrayElements", "ReleaseCharArrayElements", "JS_VALUE_GET_INT", "(jchar)"),
-  "kotlin.ShortArray" to PrimitiveArrayJniInfo("jshort", "NewShortArray", "GetShortArrayElements", "ReleaseShortArrayElements", "JS_VALUE_GET_INT", "(jshort)"),
-  "kotlin.IntArray" to PrimitiveArrayJniInfo("jint", "NewIntArray", "GetIntArrayElements", "ReleaseIntArrayElements", "JS_VALUE_GET_INT", "(jint)"),
-  "kotlin.LongArray" to PrimitiveArrayJniInfo("jlong", "NewLongArray", "GetLongArrayElements", "ReleaseLongArrayElements", "JS_VALUE_GET_INT", "(jlong)"),
-  "kotlin.FloatArray" to PrimitiveArrayJniInfo("jfloat", "NewFloatArray", "GetFloatArrayElements", "ReleaseFloatArrayElements", "JS_VALUE_GET_FLOAT64", "(jfloat)"),
-  "kotlin.DoubleArray" to PrimitiveArrayJniInfo("jdouble", "NewDoubleArray", "GetDoubleArrayElements", "ReleaseDoubleArrayElements", "JS_VALUE_GET_FLOAT64", "(jdouble)"),
+  "kotlin.BooleanArray" to PrimitiveArrayJniInfo("jboolean", "NewBooleanArray", "GetBooleanArrayElements", "ReleaseBooleanArrayElements", "jsi_value_get_bool", "(jboolean)"),
+  "kotlin.ByteArray" to PrimitiveArrayJniInfo("jbyte", "NewByteArray", "GetByteArrayElements", "ReleaseByteArrayElements", "jsi_value_get_int", "(jbyte)"),
+  "kotlin.CharArray" to PrimitiveArrayJniInfo("jchar", "NewCharArray", "GetCharArrayElements", "ReleaseCharArrayElements", "jsi_value_get_int", "(jchar)"),
+  "kotlin.ShortArray" to PrimitiveArrayJniInfo("jshort", "NewShortArray", "GetShortArrayElements", "ReleaseShortArrayElements", "jsi_value_get_int", "(jshort)"),
+  "kotlin.IntArray" to PrimitiveArrayJniInfo("jint", "NewIntArray", "GetIntArrayElements", "ReleaseIntArrayElements", "jsi_value_get_int", "(jint)"),
+  "kotlin.LongArray" to PrimitiveArrayJniInfo("jlong", "NewLongArray", "GetLongArrayElements", "ReleaseLongArrayElements", "jsi_value_get_int", "(jlong)"),
+  "kotlin.FloatArray" to PrimitiveArrayJniInfo("jfloat", "NewFloatArray", "GetFloatArrayElements", "ReleaseFloatArrayElements", "jsi_value_get_float64", "(jfloat)"),
+  "kotlin.DoubleArray" to PrimitiveArrayJniInfo("jdouble", "NewDoubleArray", "GetDoubleArrayElements", "ReleaseDoubleArrayElements", "jsi_value_get_float64", "(jdouble)"),
 )
 
 val boxedPrimitiveInfo = mapOf(
-  "kotlin.Int" to BoxedPrimitiveInfo("java/lang/Integer", "(I)V", "jint", "JS_VALUE_GET_INT", "(jint)"),
-  "kotlin.Float" to BoxedPrimitiveInfo("java/lang/Float", "(F)V", "jfloat", "JS_VALUE_GET_FLOAT64", "(jfloat)"),
-  "kotlin.Double" to BoxedPrimitiveInfo("java/lang/Double", "(D)V", "jdouble", "JS_VALUE_GET_FLOAT64", "(jdouble)"),
-  "kotlin.Long" to BoxedPrimitiveInfo("java/lang/Long", "(J)V", "jlong", "JS_VALUE_GET_INT", "(jlong)"),
-  "kotlin.Short" to BoxedPrimitiveInfo("java/lang/Short", "(S)V", "jshort", "JS_VALUE_GET_INT", "(jshort)"),
-  "kotlin.Byte" to BoxedPrimitiveInfo("java/lang/Byte", "(B)V", "jbyte", "JS_VALUE_GET_INT", "(jbyte)"),
-  "kotlin.Boolean" to BoxedPrimitiveInfo("java/lang/Boolean", "(Z)V", "jboolean", "JS_VALUE_GET_BOOL", "(jboolean)"),
-  "kotlin.Char" to BoxedPrimitiveInfo("java/lang/Character", "(C)V", "jchar", "JS_VALUE_GET_INT", "(jchar)"),
+  "kotlin.Int" to BoxedPrimitiveInfo("java/lang/Integer", "(I)V", "jint", "jsi_value_get_int", "(jint)"),
+  "kotlin.Float" to BoxedPrimitiveInfo("java/lang/Float", "(F)V", "jfloat", "jsi_value_get_float64", "(jfloat)"),
+  "kotlin.Double" to BoxedPrimitiveInfo("java/lang/Double", "(D)V", "jdouble", "jsi_value_get_float64", "(jdouble)"),
+  "kotlin.Long" to BoxedPrimitiveInfo("java/lang/Long", "(J)V", "jlong", "jsi_value_get_int", "(jlong)"),
+  "kotlin.Short" to BoxedPrimitiveInfo("java/lang/Short", "(S)V", "jshort", "jsi_value_get_int", "(jshort)"),
+  "kotlin.Byte" to BoxedPrimitiveInfo("java/lang/Byte", "(B)V", "jbyte", "jsi_value_get_int", "(jbyte)"),
+  "kotlin.Boolean" to BoxedPrimitiveInfo("java/lang/Boolean", "(Z)V", "jboolean", "jsi_value_get_bool", "(jboolean)"),
+  "kotlin.Char" to BoxedPrimitiveInfo("java/lang/Character", "(C)V", "jchar", "jsi_value_get_int", "(jchar)"),
 )
 
 val boxedJniDescriptor = mapOf(

@@ -216,12 +216,7 @@ internal fun generateBridgeFile(outputDir: String, annotatedClass: IrClass) {
       }
     }
     if (helpers.isNotEmpty()) {
-      val withFindMethod = StringBuilder()
-      if (fields.any { it.effectiveKtType in MAP_C_TYPES }) {
-        emitCBridgeFindMethod(withFindMethod)
-      }
-      withFindMethod.append(helpers)
-      append(withFindMethod)
+      append(helpers)
       appendLine()
     }
 
@@ -268,198 +263,187 @@ internal fun generateBridgeFile(outputDir: String, annotatedClass: IrClass) {
       appendLine("    return result;")
       appendLine("}")
     } else {
-    if (fields.isNotEmpty()) {
-      appendLine("    // Extract field values from JS object")
-    }
-
-    // Extract each field from the JS object
-    for (field in fields) {
-      val nullablePrimitive = field.isNullable && isKnownType(field.ktType) && isJniPrimitive(field.ktType)
-      // Non-nullable inline value classes are erased to their underlying JNI primitive on JVM,
-      // so dispatch on effectiveKtType (unwrapped) for the primitive branches.
-      val isCollectionField = field.isArray ||
-        field.effectiveKtType == "kotlin.collections.List" ||
-        field.effectiveKtType == "kotlin.collections.MutableList" ||
-        field.effectiveKtType in MAP_C_TYPES
-      val cType = if (nullablePrimitive || isCollectionField) "jobject"
-        else kotlinToCType[field.effectiveKtType] ?: "jobject"
-      val javaVar = "java_${field.name}"
-
-      appendLine("    jsi::Value js_${field.name} = jsObj.asObject(rt).getProperty(rt, \"${field.jsPropertyName}\");")
-      // For Long-backed inline classes (e.g. Color), the JS object may be unboxed —
-      // *jsObj IS the Long {low_1, high_1} with no .value wrapper. If .value is
-      // undefined, fall back to using the object directly as the Long representation.
-      if (field.ktType == "kotlin.Long" && isInlineClass(annotatedClass)) {
-        appendLine("    if (js_${field.name}.isUndefined()) {")
-        appendLine("        js_${field.name} = jsi::Value(rt, jsObj);")
-        appendLine("    }")
+      if (fields.isNotEmpty()) {
+        appendLine("    // Extract field values from JS object")
       }
-      // Inline value classes (e.g. @JvmInline value class Id(val value: Int))
-      // may be boxed ({value: ...}) or unboxed (plain int) in Kotlin/JS depending
-      // on context. We check: if it's an object, unwrap .value; otherwise use as-is.
-      // EXCEPTION: Long-backed inline classes (e.g. Color) — Long is already a JS
-      // object {low_1, high_1} in Kotlin/JS, so the object IS the value, not a wrapper.
-      if (field.isInline && field.underlyingKtType != "kotlin.Long") {
-        appendLine("    if (js_${field.name}.isObject()) {")
-        appendLine("        js_${field.name} = js_${field.name}.asObject(rt).getProperty(rt, \"value\");")
-        appendLine("    }")
-      }
-      appendLine("    $cType $javaVar;")
-      appendLine("    {")
-
-      // Open null check for nullable fields
-      if (field.isNullable) {
-        appendLine("        if (!js_${field.name}.isUndefined() && !js_${field.name}.isNull()) {")
-      }
-
-      when {
-        field.isNullable && isKnownType(field.ktType) && isJniPrimitive(field.ktType) -> {
-          emitNullablePrimitiveExtraction(this, field)
-        }
-        field.effectiveKtType == "kotlin.Boolean" -> {
-          appendLine("        $javaVar = (jboolean)js_${field.name}.asBool();")
-        }
-        field.effectiveKtType == "kotlin.Byte" -> {
-          appendLine("        $javaVar = (jbyte)JS_VALUE_GET_INT(js_${field.name});")
-        }
-        field.effectiveKtType == "kotlin.Short" -> {
-          appendLine("        $javaVar = (jshort)JS_VALUE_GET_INT(js_${field.name});")
-        }
-        field.effectiveKtType == "kotlin.Int" -> {
-          appendLine("        $javaVar = (jint)JS_VALUE_GET_INT(js_${field.name});")
-        }
-        field.effectiveKtType == "kotlin.Long" -> {
-          appendLine("        int tag_${field.name} = JS_VALUE_GET_NORM_TAG(js_${field.name});")
-          appendLine("        if (tag_${field.name} == JS_TAG_FLOAT64) {")
-          appendLine("            $javaVar = (jlong)JS_VALUE_GET_FLOAT64(js_${field.name});")
-          appendLine("        } else if (tag_${field.name} == JS_TAG_INT) {")
-          appendLine("            $javaVar = (jlong)JS_VALUE_GET_INT(js_${field.name});")
-          appendLine("        } else if (tag_${field.name} == JS_TAG_OBJECT) {")
-          appendLine("            /* Kotlin/JS Long: {low_1, high_1} packed representation */")
-          appendLine("            JSValue lowVal = JS_GetPropertyStr(ctx, js_${field.name}, \"low_1\");")
-          appendLine("            JSValue highVal = JS_GetPropertyStr(ctx, js_${field.name}, \"high_1\");")
-          appendLine("            jint low = JS_VALUE_GET_INT(lowVal);")
-          appendLine("            jint high = JS_VALUE_GET_INT(highVal);")
-          appendLine("            $javaVar = ((jlong)high << 32) | ((jlong)low & 0xFFFFFFFF);")
-          appendLine("            JS_FreeValue(ctx, lowVal);")
-          appendLine("            JS_FreeValue(ctx, highVal);")
-          appendLine("        } else {")
-          appendLine("#ifdef __ANDROID__")
-          appendLine("            __android_log_print(ANDROID_LOG_ERROR, \"BRIDGE\", \"Long field ${field.name}: unexpected JS tag %d\", tag_${field.name});")
-          appendLine("#endif")
-          appendLine("            $javaVar = 0;")
-          appendLine("        }")
-        }
-        field.effectiveKtType == "kotlin.Float" || field.effectiveKtType == "kotlin.Double" -> {
-          val cast = if (field.effectiveKtType == "kotlin.Float") "(jfloat)" else "(jdouble)"
-          appendLine("        int tag_${field.name}_d = JS_VALUE_GET_NORM_TAG(js_${field.name});")
-          appendLine("        if (tag_${field.name}_d == JS_TAG_FLOAT64) {")
-          appendLine("            $javaVar = ${cast}JS_VALUE_GET_FLOAT64(js_${field.name});")
-          appendLine("        } else if (tag_${field.name}_d == JS_TAG_INT) {")
-          appendLine("            $javaVar = ${cast}JS_VALUE_GET_INT(js_${field.name});")
-          appendLine("        } else {")
-          appendLine("#ifdef __ANDROID__")
-          appendLine("            __android_log_print(ANDROID_LOG_ERROR, \"BRIDGE\", \"Float/Double field ${field.name}: unexpected JS tag %d\", tag_${field.name}_d);")
-          appendLine("#endif")
-          appendLine("            /* JS_TAG_UNDEFINED=3, JS_TAG_NULL=2 */")
-          appendLine("            $javaVar = 0;")
-          appendLine("        }")
-        }
-        field.effectiveKtType == "kotlin.Char" -> {
-          appendLine("        $javaVar = (jchar)JS_VALUE_GET_INT(js_${field.name});")
-        }
-        field.effectiveKtType == "kotlin.String" -> {
-          appendLine("        const char *str_${field.name} = JS_ToCString(ctx, js_${field.name});")
-          appendLine("        $javaVar = env->NewStringUTF(str_${field.name});")
-          appendLine("        JS_FreeCString(ctx, str_${field.name});")
-        }
-        field.effectiveKtType in MAP_C_TYPES -> {
-          appendLine("        $javaVar = conv_${field.name}(env, rt, js_${field.name});")
-        }
-        field.effectiveKtType == "kotlin.collections.List" || field.effectiveKtType == "kotlin.collections.MutableList" -> {
-          appendLine("        $javaVar = conv_${field.name}(env, rt, js_${field.name});")
-        }
-        field.effectiveKtType == "kotlin.Any" -> {
-          emitAnyFieldExtraction(this, field)
-        }
-        field.isArray -> {
-          appendLine("        $javaVar = conv_${field.name}(env, rt, js_${field.name});")
-        }
-        field.isInline && field.isNullable -> {
-          val inlineCPrefix = cFunctionPrefix(FqName(field.ktType))
-          appendLine("        $javaVar = ${inlineCPrefix}_fromValue(env, rt, js_${field.name});")
-        }
-        field.isObjectType -> {
-          appendLine("        // Look up bridge_dispatch on the sub-object to convert it.")
-          appendLine("        intptr_t _bridge_ptr_${field.name} = jsi_get_bridge_dispatch(rt, js_${field.name});")
-          appendLine("        if (_bridge_ptr_${field.name} == 0) {")
-          appendLine("#ifdef __ANDROID__")
-          appendLine("            const char *dbgCtorNm_${field.name} = \"(unknown)\";")
-          appendLine("            JSValue dbgCtor_${field.name} = JS_GetPropertyStr(ctx, js_${field.name}, \"constructor\");")
-          appendLine("            if (!JS_IsUndefined(dbgCtor_${field.name}) && !JS_IsNull(dbgCtor_${field.name})) {")
-          appendLine("                JSValue dbgCtorNmVal_${field.name} = JS_GetPropertyStr(ctx, dbgCtor_${field.name}, \"name\");")
-          appendLine("                dbgCtorNm_${field.name} = JS_ToCString(ctx, dbgCtorNmVal_${field.name});")
-          appendLine("                JS_FreeValue(ctx, dbgCtorNmVal_${field.name});")
-          appendLine("            }")
-          appendLine("            __android_log_print(ANDROID_LOG_WARN, \"BRIDGE\", \"bridge_dispatch not found for field ${field.name} (ctor=%s)\", dbgCtorNm_${field.name});")
-          appendLine("            if (strcmp(dbgCtorNm_${field.name}, \"(unknown)\") != 0) JS_FreeCString(ctx, dbgCtorNm_${field.name});")
-          appendLine("            JS_FreeValue(ctx, dbgCtor_${field.name});")
-          appendLine("#endif")
-          appendLine("            JS_FreeValue(ctx, js_${field.name});")
-          appendLine("            return NULL;")
-          appendLine("        }")
-          appendLine("        JniBridgeDispatch *disp_${field.name} = (JniBridgeDispatch *)_bridge_ptr_${field.name};")
-          appendLine("        $javaVar = disp_${field.name}->toJavaObject(env, rt, js_${field.name});")
-        }
-      }
-
-      // Close null check for nullable fields
-      if (field.isNullable) {
-        appendLine("        } else {")
-        appendLine("            $javaVar = NULL;")
-        appendLine("        }")
-      }
-
-      appendLine("        JS_FreeValue(ctx, js_${field.name});")
-      appendLine("    }")
-      appendLine()
-    }
-
-    // Create instance using cached class/constructor/field refs.
-    appendLine("    // Create instance using cached JNI references")
-    if (isCompanion) {
-      appendLine("    jobject result = env->GetStaticObjectField(_outerCls, _companionField);")
-    } else if (isObject) {
-      appendLine("    jobject result = env->GetStaticObjectField(_cls, _instField);")
-    } else {
-      if (constructorFields.isEmpty()) {
-        appendLine("    jobject result = env->NewObject(_cls, _ctor);")
-      } else {
-        val args = constructorFields.joinToString(", ") { "java_${it.name}" }
-        appendLine("    jobject result = env->NewObject(_cls, _ctor, $args);")
-      }
-    }
-    appendLine("    if (env->ExceptionCheck()) return NULL;")
-    appendLine()
-
-    // Set body fields using cached field IDs
-    if (!isEnum && bodyFields.isNotEmpty()) {
-      appendLine("    // Set non-constructor fields")
-      for (field in bodyFields) {
+  
+      // Extract each field from the JS object
+      for (field in fields) {
+        val nullablePrimitive = field.isNullable && isKnownType(field.ktType) && isJniPrimitive(field.ktType)
+        // Non-nullable inline value classes are erased to their underlying JNI primitive on JVM,
+        // so dispatch on effectiveKtType (unwrapped) for the primitive branches.
+        val isCollectionField = field.isArray ||
+          field.effectiveKtType == "kotlin.collections.List" ||
+          field.effectiveKtType == "kotlin.collections.MutableList" ||
+          field.effectiveKtType in MAP_C_TYPES
+        val cType = if (nullablePrimitive || isCollectionField) "jobject"
+          else kotlinToCType[field.effectiveKtType] ?: "jobject"
         val javaVar = "java_${field.name}"
-        val setFn = when {
-          field.isNullable && isKnownType(field.ktType) && isJniPrimitive(field.ktType) -> "SetObjectField"
-          else -> kotlinToSetFieldFunction[field.effectiveKtType] ?: "SetObjectField"
+  
+        appendLine("    jsi::Value js_${field.name} = jsObj.asObject(rt).getProperty(rt, \"${field.jsPropertyName}\");")
+        // For Long-backed inline classes (e.g. Color), the JS object may be unboxed —
+        // *jsObj IS the Long {low_1, high_1} with no .value wrapper. If .value is
+        // undefined, fall back to using the object directly as the Long representation.
+        if (field.ktType == "kotlin.Long" && isInlineClass(annotatedClass)) {
+          appendLine("    if (js_${field.name}.isUndefined()) {")
+          appendLine("        js_${field.name} = jsi::Value(rt, jsObj);")
+          appendLine("    }")
         }
-        appendLine("    if (_fld_${field.name} != NULL) {")
-        appendLine("        env->$setFn(result, _fld_${field.name}, $javaVar);")
+        // Inline value classes (e.g. @JvmInline value class Id(val value: Int))
+        // may be boxed ({value: ...}) or unboxed (plain int) in Kotlin/JS depending
+        // on context. We check: if it's an object, unwrap .value; otherwise use as-is.
+        // EXCEPTION: Long-backed inline classes (e.g. Color) — Long is already a JS
+        // object {low_1, high_1} in Kotlin/JS, so the object IS the value, not a wrapper.
+        if (field.isInline && field.underlyingKtType != "kotlin.Long") {
+          appendLine("    if (js_${field.name}.isObject()) {")
+          appendLine("        js_${field.name} = js_${field.name}.asObject(rt).getProperty(rt, \"value\");")
+          appendLine("    }")
+        }
+        appendLine("    $cType $javaVar;")
+        appendLine("    {")
+  
+        // Open null check for nullable fields
+        if (field.isNullable) {
+          appendLine("        if (!js_${field.name}.isUndefined() && !js_${field.name}.isNull()) {")
+        }
+  
+        when {
+          field.isNullable && isKnownType(field.ktType) && isJniPrimitive(field.ktType) -> {
+            emitNullablePrimitiveExtraction(this, field)
+          }
+          field.effectiveKtType == "kotlin.Boolean" -> {
+            appendLine("        $javaVar = (jboolean)js_${field.name}.asBool();")
+          }
+          field.effectiveKtType == "kotlin.Byte" -> {
+            appendLine("        $javaVar = (jbyte)jsi_value_get_int(js_${field.name});")
+          }
+          field.effectiveKtType == "kotlin.Short" -> {
+            appendLine("        $javaVar = (jshort)jsi_value_get_int(js_${field.name});")
+          }
+          field.effectiveKtType == "kotlin.Int" -> {
+            appendLine("        $javaVar = (jint)jsi_value_get_int(js_${field.name});")
+          }
+          field.effectiveKtType == "kotlin.Long" -> {
+            appendLine("        int tag_${field.name} = jsi_value_tag(rt, js_${field.name});")
+            appendLine("        if (tag_${field.name} == JS_TAG_FLOAT64) {")
+            appendLine("            $javaVar = (jlong)jsi_value_get_float64(js_${field.name});")
+            appendLine("        } else if (tag_${field.name} == JS_TAG_INT) {")
+            appendLine("            $javaVar = (jlong)jsi_value_get_int(js_${field.name});")
+            appendLine("        } else if (tag_${field.name} == JS_TAG_OBJECT) {")
+            appendLine("            /* Kotlin/JS Long: {low_1, high_1} packed representation */")
+            appendLine("            jsi::Value lowVal = jsi_get_property(rt, js_${field.name}, \"low_1\");")
+            appendLine("            jsi::Value highVal = jsi_get_property(rt, js_${field.name}, \"high_1\");")
+            appendLine("            jint low = jsi_value_get_int(lowVal);")
+            appendLine("            jint high = jsi_value_get_int(highVal);")
+            appendLine("            $javaVar = ((jlong)high << 32) | ((jlong)low & 0xFFFFFFFF);")
+            appendLine("        } else {")
+            appendLine("#ifdef __ANDROID__")
+            appendLine("            __android_log_print(ANDROID_LOG_ERROR, \"BRIDGE\", \"Long field ${field.name}: unexpected JS tag %d\", tag_${field.name});")
+            appendLine("#endif")
+            appendLine("            $javaVar = 0;")
+            appendLine("        }")
+          }
+          field.effectiveKtType == "kotlin.Float" || field.effectiveKtType == "kotlin.Double" -> {
+            val cast = if (field.effectiveKtType == "kotlin.Float") "(jfloat)" else "(jdouble)"
+            appendLine("        int tag_${field.name}_d = jsi_value_tag(rt, js_${field.name});")
+            appendLine("        if (tag_${field.name}_d == JS_TAG_FLOAT64) {")
+            appendLine("            $javaVar = ${cast}jsi_value_get_float64(js_${field.name});")
+            appendLine("        } else if (tag_${field.name}_d == JS_TAG_INT) {")
+            appendLine("            $javaVar = ${cast}jsi_value_get_int(js_${field.name});")
+            appendLine("        } else {")
+            appendLine("#ifdef __ANDROID__")
+            appendLine("            __android_log_print(ANDROID_LOG_ERROR, \"BRIDGE\", \"Float/Double field ${field.name}: unexpected JS tag %d\", tag_${field.name}_d);")
+            appendLine("#endif")
+            appendLine("            /* JS_TAG_UNDEFINED=3, JS_TAG_NULL=2 */")
+            appendLine("            $javaVar = 0;")
+            appendLine("        }")
+          }
+          field.effectiveKtType == "kotlin.Char" -> {
+            appendLine("        $javaVar = (jchar)jsi_value_get_int(js_${field.name});")
+          }
+          field.effectiveKtType == "kotlin.String" -> {
+            appendLine("        std::string str_${field.name} = js_${field.name}.asString(rt).utf8(rt);")
+            appendLine("        $javaVar = env->NewStringUTF(str_${field.name}.c_str());")
+          }
+          field.effectiveKtType in MAP_C_TYPES ||
+            field.effectiveKtType == "kotlin.collections.List" ||
+            field.effectiveKtType == "kotlin.collections.MutableList" ||
+            field.isArray -> {
+            appendLine("        $javaVar = conv_${field.name}(env, rt, js_${field.name});")
+          }
+          field.effectiveKtType == "kotlin.Any" -> {
+            emitAnyFieldExtraction(this, field)
+          }
+          field.isInline && field.isNullable -> {
+            val inlineCPrefix = cFunctionPrefix(FqName(field.ktType))
+            appendLine("        $javaVar = ${inlineCPrefix}_fromValue(env, rt, js_${field.name});")
+          }
+          field.isObjectType -> {
+            appendLine("        // Look up bridge_dispatch on the sub-object to convert it.")
+            appendLine("        intptr_t _bridge_ptr_${field.name} = jsi_get_bridge_dispatch(rt, js_${field.name});")
+            appendLine("        if (_bridge_ptr_${field.name} == 0) {")
+            appendLine("#ifdef __ANDROID__")
+            appendLine("            std::string dbgCtorNm_${field.name} = \"(unknown)\";")
+            appendLine("            jsi::Value dbgCtor_${field.name} = jsi_get_property(rt, js_${field.name}, \"constructor\");")
+            appendLine("            if (!dbgCtor_${field.name}.isUndefined() && !dbgCtor_${field.name}.isNull()) {")
+            appendLine("                jsi::Value dbgCtorNmVal_${field.name} = jsi_get_property(rt, dbgCtor_${field.name}, \"name\");")
+            appendLine("                dbgCtorNm_${field.name} = dbgCtorNmVal_${field.name}.asString(rt).utf8(rt);")
+            appendLine("            }")
+            appendLine("            __android_log_print(ANDROID_LOG_WARN, \"BRIDGE\", \"bridge_dispatch not found for field ${field.name} (ctor=%s)\", dbgCtorNm_${field.name}.c_str());")
+            appendLine("#endif")
+            appendLine("            return NULL;")
+            appendLine("        }")
+            appendLine("        JniBridgeDispatch *disp_${field.name} = (JniBridgeDispatch *)_bridge_ptr_${field.name};")
+            appendLine("        $javaVar = disp_${field.name}->toJavaObject(env, rt, js_${field.name});")
+          }
+        }
+  
+        // Close null check for nullable fields
+        if (field.isNullable) {
+          appendLine("        } else {")
+          appendLine("            $javaVar = NULL;")
+          appendLine("        }")
+        }
+  
         appendLine("    }")
+        appendLine()
       }
+  
+      // Create instance using cached class/constructor/field refs.
+      appendLine("    // Create instance using cached JNI references")
+      if (isCompanion) {
+        appendLine("    jobject result = env->GetStaticObjectField(_outerCls, _companionField);")
+      } else if (isObject) {
+        appendLine("    jobject result = env->GetStaticObjectField(_cls, _instField);")
+      } else {
+        if (constructorFields.isEmpty()) {
+          appendLine("    jobject result = env->NewObject(_cls, _ctor);")
+        } else {
+          val args = constructorFields.joinToString(", ") { "java_${it.name}" }
+          appendLine("    jobject result = env->NewObject(_cls, _ctor, $args);")
+        }
+      }
+      appendLine("    if (env->ExceptionCheck()) return NULL;")
       appendLine()
-    }
-
-    appendLine("    return result;")
-    appendLine("}")
+  
+      // Set body fields using cached field IDs
+      if (!isEnum && bodyFields.isNotEmpty()) {
+        appendLine("    // Set non-constructor fields")
+        for (field in bodyFields) {
+          val javaVar = "java_${field.name}"
+          val setFn = when {
+            field.isNullable && isKnownType(field.ktType) && isJniPrimitive(field.ktType) -> "SetObjectField"
+            else -> kotlinToSetFieldFunction[field.effectiveKtType] ?: "SetObjectField"
+          }
+          appendLine("    if (_fld_${field.name} != NULL) {")
+          appendLine("        env->$setFn(result, _fld_${field.name}, $javaVar);")
+          appendLine("    }")
+        }
+        appendLine()
+      }
+  
+      appendLine("    return result;")
+      appendLine("}")
     } // end else (non-enum)
 
     if (isInlineClass(annotatedClass) && !isObject && constructorFields.size == 1) {
@@ -471,19 +455,17 @@ internal fun generateBridgeFile(outputDir: String, annotatedClass: IrClass) {
       appendLine("    if (_cls == NULL || _ctor == NULL) return NULL;")
       appendLine("    $underlyingCType java_v;")
       appendLine("    {")
-      appendLine("        int tag_v = JS_VALUE_GET_NORM_TAG(jsVal);")
+      appendLine("        int tag_v = jsi_value_tag(rt, jsVal);")
       appendLine("        if (tag_v == JS_TAG_FLOAT64) {")
-      appendLine("            java_v = ($underlyingCType)JS_VALUE_GET_FLOAT64(jsVal);")
+      appendLine("            java_v = ($underlyingCType)jsi_value_get_float64(jsVal);")
       appendLine("        } else if (tag_v == JS_TAG_INT) {")
-      appendLine("            java_v = ($underlyingCType)JS_VALUE_GET_INT(jsVal);")
+      appendLine("            java_v = ($underlyingCType)jsi_value_get_int(jsVal);")
       if (underlyingField.effectiveKtType == "kotlin.Long") {
         appendLine("        } else if (tag_v == JS_TAG_OBJECT) {")
         appendLine("            /* Kotlin/JS Long: {low_1, high_1} packed representation */")
-        appendLine("            JSValue lv = JS_GetPropertyStr(ctx, jsVal, \"low_1\");")
-        appendLine("            JSValue hv = JS_GetPropertyStr(ctx, jsVal, \"high_1\");")
-        appendLine("            java_v = (($underlyingCType)JS_VALUE_GET_INT(hv) << 32) | (($underlyingCType)JS_VALUE_GET_INT(lv) & 0xFFFFFFFF);")
-        appendLine("            JS_FreeValue(ctx, lv);")
-        appendLine("            JS_FreeValue(ctx, hv);")
+        appendLine("            jsi::Value lv = jsi_get_property(rt, jsVal, \"low_1\");")
+        appendLine("            jsi::Value hv = jsi_get_property(rt, jsVal, \"high_1\");")
+        appendLine("            java_v = (($underlyingCType)jsi_value_get_int(hv) << 32) | (($underlyingCType)jsi_value_get_int(lv) & 0xFFFFFFFF);")
       }
       appendLine("        } else {")
       appendLine("#ifdef __ANDROID__")
@@ -533,35 +515,6 @@ private fun emitCBoxedConverter(
   helpers.appendLine()
 }
 
-private fun emitCBridgeFindMethod(helpers: StringBuilder) {
-  helpers.appendLine(
-    """
-    static jsi::Value bridgeFindMethod(jsi::Runtime &rt, const jsi::Value &obj, const char* prefix) {
-      if (!obj.isObject()) return jsi::Value::undefined();
-      jsi::Object o = obj.asObject(rt);
-      jsi::Value ctor = o.getProperty(rt, "constructor");
-      if (!ctor.isObject()) return jsi::Value::undefined();
-      jsi::Value proto = ctor.asObject(rt).getProperty(rt, "prototype");
-      while (proto.isObject()) {
-        jsi::Array names = proto.asObject(rt).getPropertyNames(rt);
-        size_t n = names.length(rt);
-        for (size_t i = 0; i < n; i++) {
-          jsi::Value nm = names.getValueAtIndex(rt, i);
-          if (!nm.isString()) continue;
-          std::string name = nm.asString(rt).utf8(rt);
-          if (strncmp(name.c_str(), prefix, strlen(prefix)) == 0) {
-            return o.getProperty(rt, name.c_str());
-          }
-        }
-        proto = proto.asObject(rt).getProperty(rt, "__proto__");
-      }
-      return jsi::Value::undefined();
-    }
-    """.trimIndent(),
-  )
-  helpers.appendLine()
-}
-
 /**
  * Emits a C static function converting a JS value of [ktType] into a jobject. Recurses for
  * nested collections. Returns the function name.
@@ -577,21 +530,21 @@ private fun emitCValueConverter(
       helpers.appendLine(
         """
         static jobject $name(JNIEnv *env, jsi::Runtime &rt, const jsi::Value &jsVal) {
-          const char* s = jsi_to_cstring(rt, jsVal);
-          jobject r = env->NewStringUTF(s);
+          std::string s = jsVal.asString(rt).utf8(rt);
+          jobject r = env->NewStringUTF(s.c_str());
           return r;
         }
         """.trimIndent(),
       )
       helpers.appendLine()
     }
-    "kotlin.Int" -> emitCBoxedConverter(helpers, name, "java/lang/Integer", "(I)V", "JS_VALUE_GET_INT(jsVal)")
-    "kotlin.Float" -> emitCBoxedConverter(helpers, name, "java/lang/Float", "(F)V", "JS_VALUE_GET_FLOAT64(jsVal)")
-    "kotlin.Double" -> emitCBoxedConverter(helpers, name, "java/lang/Double", "(D)V", "JS_VALUE_GET_FLOAT64(jsVal)")
-    "kotlin.Boolean" -> emitCBoxedConverter(helpers, name, "java/lang/Boolean", "(Z)V", "JS_VALUE_GET_BOOL(jsVal)")
-    "kotlin.Byte" -> emitCBoxedConverter(helpers, name, "java/lang/Byte", "(B)V", "(jbyte)JS_VALUE_GET_INT(jsVal)")
-    "kotlin.Short" -> emitCBoxedConverter(helpers, name, "java/lang/Short", "(S)V", "(jshort)JS_VALUE_GET_INT(jsVal)")
-    "kotlin.Char" -> emitCBoxedConverter(helpers, name, "java/lang/Character", "(C)V", "(jchar)JS_VALUE_GET_INT(jsVal)")
+    "kotlin.Int" -> emitCBoxedConverter(helpers, name, "java/lang/Integer", "(I)V", "jsi_value_get_int(jsVal)")
+    "kotlin.Float" -> emitCBoxedConverter(helpers, name, "java/lang/Float", "(F)V", "jsi_value_get_float64(jsVal)")
+    "kotlin.Double" -> emitCBoxedConverter(helpers, name, "java/lang/Double", "(D)V", "jsi_value_get_float64(jsVal)")
+    "kotlin.Boolean" -> emitCBoxedConverter(helpers, name, "java/lang/Boolean", "(Z)V", "jsi_value_get_bool(jsVal)")
+    "kotlin.Byte" -> emitCBoxedConverter(helpers, name, "java/lang/Byte", "(B)V", "(jbyte)jsi_value_get_int(jsVal)")
+    "kotlin.Short" -> emitCBoxedConverter(helpers, name, "java/lang/Short", "(S)V", "(jshort)jsi_value_get_int(jsVal)")
+    "kotlin.Char" -> emitCBoxedConverter(helpers, name, "java/lang/Character", "(C)V", "(jchar)jsi_value_get_int(jsVal)")
     "kotlin.Long" -> {
       helpers.appendLine(
         """
@@ -686,24 +639,24 @@ private fun emitCValueConverter(
           jmethodID hc_put = env->GetMethodID(hc, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
           jobject result = env->NewObject(hc, hc_init);
           if (!jsVal.isObject()) return result;
-          jsi::Value entriesFn = bridgeFindMethod(rt, jsVal, "get_entries_");
+          jsi::Value entriesFn = jsi_find_method(rt, jsVal, "get_entries_");
           if (entriesFn.isUndefined() || !entriesFn.isObject()) return result;
           jsi::Value entries = entriesFn.asObject(rt).asFunction(rt).callWithThis(rt, jsVal.asObject(rt));
           if (!entries.isObject()) return result;
-          jsi::Value iterFn = bridgeFindMethod(rt, entries, "iterator_");
+          jsi::Value iterFn = jsi_find_method(rt, entries, "iterator_");
           if (iterFn.isUndefined() || !iterFn.isObject()) return result;
           jsi::Value iterator = iterFn.asObject(rt).asFunction(rt).callWithThis(rt, entries.asObject(rt));
           if (!iterator.isObject()) return result;
-          jsi::Value hasNextFn = bridgeFindMethod(rt, iterator, "hasNext_");
-          jsi::Value nextFn = bridgeFindMethod(rt, iterator, "next_");
+          jsi::Value hasNextFn = jsi_find_method(rt, iterator, "hasNext_");
+          jsi::Value nextFn = jsi_find_method(rt, iterator, "next_");
           if (hasNextFn.isUndefined() || nextFn.isUndefined()) return result;
           while (true) {
             jsi::Value hn = hasNextFn.asObject(rt).asFunction(rt).callWithThis(rt, iterator.asObject(rt));
             if (!hn.isBool() || !hn.asBool()) break;
             jsi::Value entry = nextFn.asObject(rt).asFunction(rt).callWithThis(rt, iterator.asObject(rt));
             if (!entry.isObject()) break;
-            jsi::Value keyFn = bridgeFindMethod(rt, entry, "get_key_");
-            jsi::Value valueFn = bridgeFindMethod(rt, entry, "get_value_");
+            jsi::Value keyFn = jsi_find_method(rt, entry, "get_key_");
+            jsi::Value valueFn = jsi_find_method(rt, entry, "get_value_");
             if (keyFn.isUndefined() || valueFn.isUndefined()) break;
             jsi::Value keyVal = keyFn.asObject(rt).asFunction(rt).callWithThis(rt, entry.asObject(rt));
             jsi::Value valueVal = valueFn.asObject(rt).asFunction(rt).callWithThis(rt, entry.asObject(rt));
@@ -771,12 +724,12 @@ internal fun emitNullablePrimitiveExtraction(
 
   if (field.ktType == "kotlin.Long") {
     // Long needs tag-based extraction
-    sb.appendLine("            int tag_${field.name} = JS_VALUE_GET_NORM_TAG(js_${field.name});")
+    sb.appendLine("            int tag_${field.name} = jsi_value_tag(rt, js_${field.name});")
     sb.appendLine("            jlong longVal;")
     sb.appendLine("            if (tag_${field.name} == JS_TAG_FLOAT64) {")
-    sb.appendLine("                longVal = (jlong)JS_VALUE_GET_FLOAT64(js_${field.name});")
+    sb.appendLine("                longVal = (jlong)jsi_value_get_float64(js_${field.name});")
     sb.appendLine("            } else {")
-    sb.appendLine("                longVal = (jlong)JS_VALUE_GET_INT(js_${field.name});")
+    sb.appendLine("                longVal = (jlong)jsi_value_get_int(js_${field.name});")
     sb.appendLine("            }")
     sb.appendLine("            $javaVar = env->NewObject(_boxed_${field.name}, _boxedCtor_${field.name}, longVal);")
   } else {
