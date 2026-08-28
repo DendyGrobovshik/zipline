@@ -121,7 +121,7 @@ actual class JsEngine private constructor(
     // is nothing to deliver changes to, and the native side would need
     // redwood classes that may be absent from the classpath.
     if (rdmaChangeSink == null) return
-    initRdmaChangesChannel(context)
+    initRdmaChangesChannel(context, rdmaChangeSink)
   }
 
   internal actual fun getInboundChannel(): CallChannel {
@@ -247,7 +247,7 @@ actual class JsEngine private constructor(
   private external fun cdpResetAgent(context: Long)
   private external fun cdpDetach(context: Long)
   @JvmName("initRdmaChangesChannel")
-  private external fun initRdmaChangesChannel(context: Long)
+  private external fun initRdmaChangesChannel(context: Long, rdmaChangeSink: RdmaChangeSink?)
 
   internal actual fun bridgeInitAll() {
     bridgeInitAllNative(getJsContext(context))

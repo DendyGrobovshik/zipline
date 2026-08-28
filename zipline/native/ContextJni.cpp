@@ -202,8 +202,15 @@ ContextJni::ContextJni(JNIEnv* env, bool forceEagerCompilation)
 void ContextJni::deleteBridgeRefs(JNIEnv* env) {
   if (rdmaBridgeClass != nullptr) {
     env->DeleteGlobalRef(rdmaBridgeClass);
-    env->DeleteGlobalRef(rdmaBridgeInstance);
     env->DeleteGlobalRef(arrayListClass);
+  }
+  if (rdmaChangeSink != nullptr) {
+    env->DeleteGlobalRef(rdmaChangeSink);
+    rdmaChangeSink = nullptr;
+  }
+  if (pairClass != nullptr) {
+    env->DeleteGlobalRef(pairClass);
+    pairClass = nullptr;
   }
 }
 
@@ -629,28 +636,6 @@ void ContextJni::cacheRdmaBridgeMethods(JNIEnv* env) {
   this->rdmaBridgeClass = static_cast<jclass>(env->NewGlobalRef(cls));
   if (!this->rdmaBridgeClass) return;
 
-  // Change factories
-  this->rdmaBridgeCreateCreate = env->GetStaticMethodID(
-      cls, "createCreate", "(II)Lapp/cash/redwood/protocol/Create;");
-  this->rdmaBridgeCreateAdd = env->GetStaticMethodID(
-      cls, "createAdd", "(IIII)Lapp/cash/redwood/protocol/ChildrenChange;");
-  this->rdmaBridgeCreateRemove = env->GetStaticMethodID(
-      cls, "createRemove", "(IIIZ)Lapp/cash/redwood/protocol/ChildrenChange;");
-  this->rdmaBridgeCreateMove = env->GetStaticMethodID(
-      cls, "createMove", "(IIIII)Lapp/cash/redwood/protocol/ChildrenChange;");
-  this->rdmaBridgeCreatePropertyChange = env->GetStaticMethodID(
-      cls, "createPropertyChange",
-      "(IIILkotlinx/serialization/json/JsonElement;)Lapp/cash/redwood/protocol/PropertyChange;");
-  this->rdmaBridgeCreateModifierChange = env->GetStaticMethodID(
-      cls, "createModifierChange",
-      "(ILjava/util/List;)Lapp/cash/redwood/protocol/ModifierChange;");
-  this->rdmaBridgeCreateModifierElement = env->GetStaticMethodID(
-      cls, "createModifierElement",
-      "(ILkotlinx/serialization/json/JsonElement;)Lapp/cash/redwood/protocol/ModifierElement;");
-  this->rdmaBridgeCreateBridgeChange = env->GetStaticMethodID(
-      cls, "createBridgeChange",
-      "(ILjava/lang/Object;)Lapp/cash/redwood/protocol/BridgeChange;");
-
   // JsonElement factories
   this->rdmaBridgeJsonPrimitiveString = env->GetStaticMethodID(
       cls, "jsonPrimitiveString",
@@ -679,22 +664,44 @@ void ContextJni::cacheRdmaBridgeMethods(JNIEnv* env) {
   this->arrayListInitWithCapacity = env->GetMethodID(alCls, "<init>", "(I)V");
   this->arrayListAdd = env->GetMethodID(alCls, "add", "(Ljava/lang/Object;)Z");
 
-  // Get INSTANCE (Kotlin object singleton) for calling sendChanges
-  jfieldID instanceField = env->GetStaticFieldID(cls, "INSTANCE",
-      "Lapp/cash/redwood/treehouse/RdmaBridge;");
-  this->rdmaBridgeInstance = env->NewGlobalRef(
-      env->GetStaticObjectField(cls, instanceField));
-
-  // sendChanges is an instance method (override of ChangesSink.sendChanges)
-  jclass csCls = env->FindClass("app/cash/redwood/protocol/ChangesSink");
-  this->rdmaBridgeSendChanges = env->GetMethodID(csCls, "sendChanges",
-      "(Ljava/util/List;)V");
-
-  // sendBatch is a static method on RdmaBridge
-  this->rdmaBridgeSendBatch = env->GetStaticMethodID(cls, "sendBatch",
-      "(Ljava/util/List;)V");
-
   pendingChanges.reserve(RDMA_BATCH_SIZE);
+}
+
+void ContextJni::cacheRdmaSink(jobject sink) {
+  if (!sink) return;
+  JNIEnv* env = getEnv();
+  if (!env) return;
+
+  rdmaChangeSink = env->NewGlobalRef(sink);
+  if (!rdmaChangeSink) return;
+
+  jclass sinkCls = env->FindClass("app/cash/zipline/RdmaChangeSink");
+  if (!sinkCls) {
+    env->ExceptionClear();
+    env->DeleteGlobalRef(rdmaChangeSink);
+    rdmaChangeSink = nullptr;
+    return;
+  }
+  rdmaSinkCreateCreate = env->GetMethodID(sinkCls, "createCreate", "(II)V");
+  rdmaSinkCreatePropertyChange = env->GetMethodID(
+      sinkCls, "createPropertyChange",
+      "(IIILkotlinx/serialization/json/JsonElement;)V");
+  rdmaSinkCreateModifierChange = env->GetMethodID(
+      sinkCls, "createModifierChange", "(ILjava/util/List;)V");
+  rdmaSinkCreateAdd = env->GetMethodID(sinkCls, "createAdd", "(IIII)V");
+  rdmaSinkCreateRemove = env->GetMethodID(sinkCls, "createRemove", "(IIIZ)V");
+  rdmaSinkCreateMove = env->GetMethodID(sinkCls, "createMove", "(IIIII)V");
+  rdmaSinkCreateBridgeChange = env->GetMethodID(
+      sinkCls, "createBridgeChange", "(ILjava/lang/Object;)V");
+  rdmaSinkSetRemoveDetach = env->GetMethodID(sinkCls, "setRemoveDetach", "(I)V");
+  rdmaSinkSendBatch = env->GetMethodID(sinkCls, "sendBatch", "()V");
+  rdmaSinkSendChanges = env->GetMethodID(sinkCls, "sendChanges", "()V");
+  env->DeleteLocalRef(sinkCls);
+
+  jclass pairCls = env->FindClass("kotlin/Pair");
+  pairClass = static_cast<jclass>(env->NewGlobalRef(pairCls));
+  pairInit = env->GetMethodID(pairCls, "<init>", "(Ljava/lang/Object;Ljava/lang/Object;)V");
+  env->DeleteLocalRef(pairCls);
 }
 
 jobject ContextJni::jsValueToJsonElement(JNIEnv* env, const jsi::Value& val) {
@@ -789,50 +796,56 @@ jobject ContextJni::jsObjectToJsonElement(JNIEnv* env, const jsi::Value& val) {
   return result;
 }
 
-static jobject rdmaChangeToJava(JNIEnv* env, const RdmaChange& ch, ContextJni* context) {
+void ContextJni::dispatchChangeToSink(JNIEnv* env, const RdmaChange& ch) {
   switch (ch.type) {
     case RdmaChangeType::Create:
-      return env->CallStaticObjectMethod(context->rdmaBridgeClass, context->rdmaBridgeCreateCreate, ch.id, ch.field1);
+      env->CallVoidMethod(rdmaChangeSink, rdmaSinkCreateCreate, ch.id, ch.field1);
+      break;
     case RdmaChangeType::PropertyChange: {
-      jobject jsonElement = context->jsValueToJsonElement(env, *ch.jsValue);
-      jobject result = env->CallStaticObjectMethod(context->rdmaBridgeClass, context->rdmaBridgeCreatePropertyChange,
+      jobject jsonElement = jsValueToJsonElement(env, *ch.jsValue);
+      env->CallVoidMethod(rdmaChangeSink, rdmaSinkCreatePropertyChange,
           ch.id, ch.field1, ch.field2, jsonElement);
       if (jsonElement) env->DeleteLocalRef(jsonElement);
-      return result;
+      break;
     }
     case RdmaChangeType::ModifierChange: {
-      jobject elementsList = env->NewObject(context->arrayListClass, context->arrayListInit);
-      if (ch.jsValue && ch.jsValue->isObject() && ch.jsValue->asObject(*context->runtime).isArray(*context->runtime)) {
-        jsi::Array arr = ch.jsValue->asObject(*context->runtime).asArray(*context->runtime);
-        size_t numElements = arr.length(*context->runtime);
+      jobject elementsList = env->NewObject(arrayListClass, arrayListInit);
+      if (ch.jsValue && ch.jsValue->isObject() && ch.jsValue->asObject(*runtime).isArray(*runtime)) {
+        jsi::Array arr = ch.jsValue->asObject(*runtime).asArray(*runtime);
+        size_t numElements = arr.length(*runtime);
         for (size_t j = 0; j < numElements; j++) {
-          jsi::Value elem = arr.getValueAtIndex(*context->runtime, j);
-          jsi::Value modTagVal = elem.asObject(*context->runtime).getProperty(*context->runtime, "0");
+          jsi::Value elem = arr.getValueAtIndex(*runtime, j);
+          jsi::Value modTagVal = elem.asObject(*runtime).getProperty(*runtime, "0");
           int mTag = static_cast<int>(modTagVal.asNumber());
-          jsi::Value modVal = elem.asObject(*context->runtime).getProperty(*context->runtime, "1");
+          jsi::Value modVal = elem.asObject(*runtime).getProperty(*runtime, "1");
           jobject jModVal = modVal.isUndefined()
-              ? env->CallStaticObjectMethod(context->rdmaBridgeClass, context->rdmaBridgeJsonNull)
-              : context->jsValueToJsonElement(env, modVal);
-          jobject modElement = env->CallStaticObjectMethod(context->rdmaBridgeClass, context->rdmaBridgeCreateModifierElement, mTag, jModVal);
-          env->CallBooleanMethod(elementsList, context->arrayListAdd, modElement);
+              ? env->CallStaticObjectMethod(rdmaBridgeClass, rdmaBridgeJsonNull)
+              : jsValueToJsonElement(env, modVal);
+          jobject jTag = env->CallStaticObjectMethod(integerClass, integerValueOf, (jint)mTag);
+          jobject pair = env->NewObject(pairClass, pairInit, jTag, jModVal);
+          env->CallBooleanMethod(elementsList, arrayListAdd, pair);
+          if (jTag) env->DeleteLocalRef(jTag);
           if (jModVal) env->DeleteLocalRef(jModVal);
-          env->DeleteLocalRef(modElement);
+          env->DeleteLocalRef(pair);
         }
       }
-      jobject result = env->CallStaticObjectMethod(context->rdmaBridgeClass, context->rdmaBridgeCreateModifierChange, ch.id, elementsList);
+      env->CallVoidMethod(rdmaChangeSink, rdmaSinkCreateModifierChange, ch.id, elementsList);
       env->DeleteLocalRef(elementsList);
-      return result;
+      break;
     }
     case RdmaChangeType::Add:
-      return env->CallStaticObjectMethod(context->rdmaBridgeClass, context->rdmaBridgeCreateAdd, ch.id, ch.field1, ch.field2, ch.field3);
+      env->CallVoidMethod(rdmaChangeSink, rdmaSinkCreateAdd, ch.id, ch.field1, ch.field2, ch.field3);
+      break;
     case RdmaChangeType::Remove:
-      return env->CallStaticObjectMethod(context->rdmaBridgeClass, context->rdmaBridgeCreateRemove,
+      env->CallVoidMethod(rdmaChangeSink, rdmaSinkCreateRemove,
           ch.id, ch.field1, ch.field2, ch.detach ? JNI_TRUE : JNI_FALSE);
+      break;
     case RdmaChangeType::Move:
-      return env->CallStaticObjectMethod(context->rdmaBridgeClass, context->rdmaBridgeCreateMove, ch.id, ch.field1, ch.field2, ch.field3, ch.count);
+      env->CallVoidMethod(rdmaChangeSink, rdmaSinkCreateMove, ch.id, ch.field1, ch.field2, ch.field3, ch.count);
+      break;
     case RdmaChangeType::BridgeChange: {
-      if (!ch.jsValue || !ch.jsValue->isObject()) return nullptr;
-      jsi::Runtime& rt = context->getRuntime();
+      if (!ch.jsValue || !ch.jsValue->isObject()) return;
+      jsi::Runtime& rt = getRuntime();
       jsi::Object obj = ch.jsValue->asObject(rt);
       jsi::Value lowVal = obj.getProperty(rt, "bridge_dispatch_low");
       jsi::Value highVal = obj.getProperty(rt, "bridge_dispatch_high");
@@ -844,33 +857,26 @@ static jobject rdmaChangeToJava(JNIEnv* env, const RdmaChange& ch, ContextJni* c
         JniBridgeDispatch* disp = reinterpret_cast<JniBridgeDispatch*>(ptr);
         jobject uiChange = disp->toJavaObject(env, rt, *ch.jsValue);
         if (!uiChange) {
-          return nullptr;
+          return;
         }
-        jobject result = env->CallStaticObjectMethod(context->rdmaBridgeClass, context->rdmaBridgeCreateBridgeChange,
-            ch.id, uiChange);
+        env->CallVoidMethod(rdmaChangeSink, rdmaSinkCreateBridgeChange, ch.id, uiChange);
         env->DeleteLocalRef(uiChange);
-        return result;
       }
-      return nullptr;
+      break;
     }
   }
-  return nullptr;
 }
 
 void ContextJni::flushPendingBatch(JNIEnv* env, int toFlush) {
-  jobject list = env->NewObject(arrayListClass, arrayListInitWithCapacity, toFlush);
-  if (!list) return;
+  if (rdmaChangeSink == nullptr) {
+    pendingChanges.erase(pendingChanges.begin(), pendingChanges.begin() + toFlush);
+    return;
+  }
 
   for (int i = 0; i < toFlush; i++) {
-    const RdmaChange& ch = pendingChanges[i];
-    jobject change = rdmaChangeToJava(env, ch, this);
-    if (change) {
-      env->CallBooleanMethod(list, arrayListAdd, change);
-      env->DeleteLocalRef(change);
-    }
+    dispatchChangeToSink(env, pendingChanges[i]);
   }
-  env->CallStaticVoidMethod(rdmaBridgeClass, rdmaBridgeSendBatch, list);
-  env->DeleteLocalRef(list);
+  env->CallVoidMethod(rdmaChangeSink, rdmaSinkSendBatch);
   pendingChanges.erase(pendingChanges.begin(), pendingChanges.begin() + toFlush);
 }
 
@@ -878,19 +884,15 @@ void ContextJni::finishFlushPending(JNIEnv* env) {
   int remaining = (int)pendingChanges.size();
   if (remaining == 0) return;
 
-  jobject list = env->NewObject(arrayListClass, arrayListInitWithCapacity, remaining);
-  if (!list) return;
+  if (rdmaChangeSink == nullptr) {
+    pendingChanges.clear();
+    return;
+  }
 
   for (int i = 0; i < remaining; i++) {
-    const RdmaChange& ch = pendingChanges[i];
-    jobject change = rdmaChangeToJava(env, ch, this);
-    if (change) {
-      env->CallBooleanMethod(list, arrayListAdd, change);
-      env->DeleteLocalRef(change);
-    }
+    dispatchChangeToSink(env, pendingChanges[i]);
   }
-  env->CallVoidMethod(rdmaBridgeInstance, rdmaBridgeSendChanges, list);
-  env->DeleteLocalRef(list);
+  env->CallVoidMethod(rdmaChangeSink, rdmaSinkSendChanges);
   pendingChanges.clear();
 }
 
@@ -993,11 +995,11 @@ static jsi::Value rdmaSetRemoveDetach(
     jsi::Runtime& rt, ContextJni* context, const jsi::Value& thisVal,
     const jsi::Value* args, size_t argc) {
   int idx = static_cast<int>(args[0].asNumber());
-  if (idx >= 0 && idx < (int)context->pendingChanges.size()) {
-    RdmaChange& ch = context->pendingChanges[idx];
-    if (ch.type == RdmaChangeType::Remove) {
-      ch.detach = true;
-    }
+  // The sink tracks remove changes in its own accumulated batch (same
+  // positional semantics as the Kotlin/Native implementation).
+  auto env = context->getEnv();
+  if (env != nullptr && context->rdmaChangeSink != nullptr) {
+    env->CallVoidMethod(context->rdmaChangeSink, context->rdmaSinkSetRemoveDetach, idx);
   }
   return jsi::Value::undefined();
 }
@@ -1035,7 +1037,9 @@ static jsi::Value rdmaChangesLengthCallback(
   return jsi::Value(size);
 }
 
-void ContextJni::initRdmaChangesChannel(JNIEnv* env) {
+void ContextJni::initRdmaChangesChannel(JNIEnv* env, jobject rdmaChangeSink) {
+  if (!rdmaChangeSink) return;
+  cacheRdmaSink(rdmaChangeSink);
   cacheRdmaBridgeMethods(env);
   if (!this->rdmaBridgeClass) {
     // Redwood is not on the classpath; leave the RDMA channel uninstalled

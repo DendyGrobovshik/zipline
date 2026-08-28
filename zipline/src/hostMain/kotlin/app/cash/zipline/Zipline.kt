@@ -103,6 +103,11 @@ actual class Zipline private constructor(
     )
   }
 
+  fun initRdmaChannel(sink: RdmaChangeSink) {
+    jsEngine.rdmaChangeSink = sink
+    jsEngine.initRdmaChangesChannel()
+  }
+
   actual fun <T : ZiplineService> bind(name: String, instance: T) {
     error("unexpected call to Zipline.bind: is the Zipline plugin configured?")
   }
