@@ -7,6 +7,7 @@
 #include <jni.h>
 #include <memory>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -61,6 +62,11 @@ class ContextJni : public ContextBase {
   // Cached JNI references used by throwers and the value converter.
   JavaVM* javaVm;
   const jint jniVersion;
+
+  // Thread the engine was created on (the Zipline dispatcher thread). Engine
+  // APIs that touch the runtime (heap sampling, heap snapshots) must run on
+  // this thread; used to log a warning when they don't.
+  std::thread::id jsThreadId;
 
   // Hermes runtime configuration snapshot (shared Zipline defaults from
   // HermesCore_makeRuntimeConfig) — memoryUsage() reports its heap sizes.

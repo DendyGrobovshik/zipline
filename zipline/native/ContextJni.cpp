@@ -81,6 +81,7 @@ ContextJni::ContextJni(JNIEnv* env, bool forceEagerCompilation)
       jsExceptionClass(findClassOrNull(env, "app/cash/zipline/JsException")),
       pendingJavaException(nullptr) {
   env->GetJavaVM(&javaVm);
+  jsThreadId = std::this_thread::get_id();
 
   // Helper to look up a static method on a class, gracefully handling
   // a null class. Returns null if either the class or the method is missing.
