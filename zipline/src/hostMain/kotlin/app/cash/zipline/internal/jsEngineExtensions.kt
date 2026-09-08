@@ -16,8 +16,11 @@ internal fun getModuleDependencies(jsEngine: JsEngine): List<String> {
 
 internal fun getLog(jsEngine: JsEngine): String? = jsEngine.getGlobalProperty("log")
 
-internal fun initModuleLoader(jsEngine: JsEngine) {
+public fun initModuleLoader(jsEngine: JsEngine) {
   jsEngine.installModuleLoader()
+  // Register __bridgeRegister JS function on globalThis (C side).
+  // Runs before any modules load, so generated .kt files can call it.
+  jsEngine.bridgeInitAll()
 }
 
 internal fun loadJsModule(jsEngine: JsEngine, script: String, id: String) {
@@ -26,7 +29,7 @@ internal fun loadJsModule(jsEngine: JsEngine, script: String, id: String) {
   jsEngine.evaluate("delete globalThis.$CURRENT_MODULE_ID;")
 }
 
-internal fun loadJsModule(jsEngine: JsEngine, id: String, bytecode: ByteArray) {
+public fun loadJsModule(jsEngine: JsEngine, id: String, bytecode: ByteArray) {
   jsEngine.setGlobalProperty(CURRENT_MODULE_ID, id)
   jsEngine.execute(bytecode, id)
   jsEngine.deleteGlobalProperty(CURRENT_MODULE_ID)

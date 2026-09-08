@@ -43,3 +43,4 @@ internal inline fun <reified T : CVariable> NativePlacement.allocArrayOf(
   }
   return array
 }
+

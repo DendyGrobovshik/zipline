@@ -8,6 +8,11 @@ import app.cash.zipline.internal.bridge.INBOUND_CHANNEL_NAME
 import kotlin.concurrent.atomics.AtomicReference
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlinx.cinterop.*
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 
 // Channels and sinks are keyed by engine context pointer so that multiple
 // concurrent runtimes (e.g. an old and a new Zipline during a screen
@@ -17,6 +22,17 @@ import kotlinx.cinterop.*
 private val outboundChannels = AtomicReference<Map<Long, CallChannel>>(emptyMap())
 private val rdmaChangeSinks = AtomicReference<Map<Long, RdmaChangeSink>>(emptyMap())
 private val cdpListeners = AtomicReference<Map<Long, CdpListener>>(emptyMap())
+
+val bridgeRetainRefs = mutableListOf<() -> Unit>()
+
+fun registerBridgeInitHook(hook: () -> Unit) {
+  bridgeRetainRefs.add(hook)
+}
+
+fun registerBridge(fqn: String, fn: CPointer<CFunction<(COpaquePointer?, Int) -> COpaquePointer?>>) {
+  @Suppress("UNCHECKED_CAST")
+  HermesBridge_addBridgeEntry(fqn, fn as COpaquePointer)
+}
 
 private fun <V> AtomicReference<Map<Long, V>>.putValue(key: Long, value: V) {
   while (true) {
@@ -70,6 +86,151 @@ private fun rdmaChangeSinkSendChanges(context: COpaquePointer?) {
     sink.sendChanges()
 }
 
+// Recursive JSON serializer for Hermes JS values — equivalent to gogabr's jsValueToJsonElement
+// in QuickJs.kt. Recursively converts JS objects/arrays/primitives into kotlinx JsonElement.
+private fun hermesValueToJsonElement(context: COpaquePointer?, handle: Int): JsonElement {
+    if (context == null) return JsonNull
+    val tag = HermesBridge_getValueTag(context, handle)
+    return when (tag) {
+        1 -> JsonPrimitive(HermesBridge_getValueDouble(context, handle).toInt())
+        2 -> {
+            val d = HermesBridge_getValueDouble(context, handle)
+            val l = d.toLong()
+            if (l.toDouble() == d) JsonPrimitive(l) else JsonPrimitive(d)
+        }
+        3 -> {
+            val str = HermesBridge_getValueString(context, handle)
+            val kstr = str?.toKStringFromUtf8()?.also { platform.posix.free(str) } ?: ""
+            JsonPrimitive(kstr)
+        }
+        4 -> JsonPrimitive(HermesBridge_getValueBool(context, handle) != 0)
+        6 -> {
+            val len = HermesBridge_getArrayLength(context, handle)
+            val items = mutableListOf<JsonElement>()
+            var i = 0
+            while (i < len) {
+                val elemRef = HermesBridge_createArrayElementHandle(context, handle, i)
+                items.add(hermesValueToJsonElement(context, elemRef))
+                HermesBridge_freeHandle(context, elemRef)
+                i++
+            }
+            JsonArray(items)
+        }
+        5 -> {
+            val keysHandle = HermesBridge_getObjectPropertyNames(context, handle)
+            if (keysHandle == 0) return JsonNull
+            val keysLen = HermesBridge_getArrayLength(context, keysHandle)
+            val props = mutableMapOf<String, JsonElement>()
+            var i = 0
+            while (i < keysLen) {
+                val keyHandle = HermesBridge_createArrayElementHandle(context, keysHandle, i)
+                val keyPtr = HermesBridge_getValueString(context, keyHandle)
+                val key = keyPtr?.toKStringFromUtf8()?.also { platform.posix.free(keyPtr) } ?: ""
+                HermesBridge_freeHandle(context, keyHandle)
+                val valHandle = HermesBridge_createHandle(context, handle, key)
+                props[key] = hermesValueToJsonElement(context, valHandle)
+                HermesBridge_freeHandle(context, valHandle)
+                i++
+            }
+            HermesBridge_freeHandle(context, keysHandle)
+            JsonObject(props)
+        }
+        else -> JsonNull
+    }
+}
+
+// Per-change-type callbacks called from C++ JS host-function lambdas.
+// Each writes directly into the RdmaChangeSink accumulator.
+
+private fun onRdmaCreate(context: COpaquePointer?, id: Int, tag: Int) {
+    try {
+        rdmaChangeSinks.load()[context?.rawValue?.toLong() ?: return]?.createCreate(id, tag)
+    } catch (_: Throwable) {
+    }
+}
+
+private fun onRdmaPropertyChange(context: COpaquePointer?, id: Int, widgetTag: Int, propertyTag: Int, valueHandle: Int) {
+    try {
+        val sink = rdmaChangeSinks.load()[context?.rawValue?.toLong() ?: return] ?: return
+        val value = hermesValueToJsonElement(context, valueHandle)
+        sink.createPropertyChange(id, widgetTag, propertyTag, value)
+    } catch (_: Throwable) {
+    }
+}
+
+private fun onRdmaModifierChange(context: COpaquePointer?, id: Int, elementsHandle: Int) {
+    try {
+        val sink = rdmaChangeSinks.load()[context?.rawValue?.toLong() ?: return] ?: return
+        val elements = jsArrayToModifierElements(context, elementsHandle)
+        sink.createModifierChange(id, elements)
+    } catch (_: Throwable) {
+    }
+}
+
+// Equivalent to gogabr's jsArrayToModifierElements in QuickJs.kt.
+private fun jsArrayToModifierElements(context: COpaquePointer?, elementsHandle: Int): List<Pair<Int, JsonElement>> {
+    val len = HermesBridge_getArrayLength(context, elementsHandle)
+    val elements = mutableListOf<Pair<Int, JsonElement>>()
+    var i = 0
+    while (i < len) {
+        val elemRef = HermesBridge_createArrayElementHandle(context, elementsHandle, i)
+        val tagHandle = HermesBridge_createHandle(context, elemRef, "0")
+        val valHandle = HermesBridge_createHandle(context, elemRef, "1")
+        val mtag = HermesBridge_getValueDouble(context, tagHandle).toInt()
+        val value = hermesValueToJsonElement(context, valHandle)
+        elements.add(mtag to value)
+        HermesBridge_freeHandle(context, valHandle)
+        HermesBridge_freeHandle(context, tagHandle)
+        HermesBridge_freeHandle(context, elemRef)
+        i++
+    }
+    return elements
+}
+
+private fun onRdmaAdd(context: COpaquePointer?, id: Int, childrenTag: Int, childId: Int, index: Int) {
+    try {
+        rdmaChangeSinks.load()[context?.rawValue?.toLong() ?: return]?.createAdd(id, childrenTag, childId, index)
+    } catch (_: Throwable) {
+    }
+}
+
+private fun onRdmaRemove(context: COpaquePointer?, id: Int, childrenTag: Int, index: Int, detach: Int) {
+    try {
+        rdmaChangeSinks.load()[context?.rawValue?.toLong() ?: return]?.createRemove(id, childrenTag, index, detach != 0)
+    } catch (_: Throwable) {
+    }
+}
+
+private fun onRdmaMove(context: COpaquePointer?, id: Int, childrenTag: Int, fromIndex: Int, toIndex: Int, count: Int) {
+    try {
+        rdmaChangeSinks.load()[context?.rawValue?.toLong() ?: return]?.createMove(id, childrenTag, fromIndex, toIndex, count)
+    } catch (_: Throwable) {
+    }
+}
+
+private fun onRdmaBridgeChange(context: COpaquePointer?, id: Int, jsValueHandle: Int) {
+    try {
+        val sink = rdmaChangeSinks.load()[context?.rawValue?.toLong() ?: return] ?: return
+        val dispPtr = HermesBridge_getBridgeDispatch(context, jsValueHandle)
+        if (dispPtr == 0L) return
+        val dispatchFn = dispPtr.toCPointer<CFunction<(COpaquePointer?, Int) -> COpaquePointer?>>()!!
+        val ktObj = dispatchFn(context, jsValueHandle)!!.asStableRef<Any>().get()
+        sink.createBridgeChange(id, ktObj)
+    } catch (_: Throwable) {
+    }
+}
+
+private fun onRdmaSetRemoveDetach(context: COpaquePointer?, index: Int) {
+    rdmaChangeSinks.load()[context?.rawValue?.toLong() ?: return]?.setRemoveDetach(index)
+}
+
+private fun onRdmaSendChanges(context: COpaquePointer?) {
+    try {
+        rdmaChangeSinks.load()[context?.rawValue?.toLong() ?: return]?.sendChanges()
+    } catch (_: Throwable) {
+    }
+}
+
 // CDP session callbacks (see CdpSession.cpp). May be invoked from arbitrary
 // threads; the listener lookup is a lock-free read of the copy-on-write map.
 private fun cdpMessageCallback(context: COpaquePointer?, json: CPointer<ByteVar>?) {
@@ -116,6 +277,9 @@ actual class JsEngine private constructor(
       // kotlinx.collections fast paths in Kotlin/JS. These are called from
       // generated Kotlin/JS code via _intsetFind, _scatterSetFind, etc.
       js_register_intrinsics(jsiRuntime)
+
+      // Install __bridgeRegister JS function for bridge dispatch registration
+      HermesBridge_installBridgeRegister(jsiRuntime)
 
       return JsEngine(runtime)
     }
@@ -195,6 +359,26 @@ actual class JsEngine private constructor(
     return HermesContext_evaluate(contextPointer, script, fileName).useContents {
       toAny("Evaluation failed")
     }
+  }
+
+  actual fun evaluateForBridge(script: String, fileName: String): Any? {
+    checkNotClosed()
+    val bytecode = compile(script, fileName)
+    val byteArrayPin = bytecode.pin()
+    val handle = HermesContext_executeToHandle(
+      contextPointer,
+      byteArrayPin.addressOf(0).reinterpret<UByteVar>(),
+      bytecode.size,
+      fileName,
+    )
+    byteArrayPin.unpin()
+    if (handle < 0) {
+      val error = HermesContext_getLastError(contextPointer)
+      throw JsException(error?.toKString() ?: "Execution failed")
+    }
+    val result = bridgeForAny(contextPointer, handle)
+    HermesBridge_freeHandle(contextPointer, handle)
+    return result
   }
 
   actual fun compile(sourceCode: String, fileName: String, sourceMap: String?): ByteArray {
@@ -387,14 +571,21 @@ actual class JsEngine private constructor(
     checkNotClosed()
     if (rdmaChangeSink == null) return
     val context = requireNotNull(contextPointer) { "Engine has no native context" }
-    // Store the Kotlin rdmaChangeSink in a per-context registry so the C++
-    // layer can invoke it via rdmaChangeSinkSendChanges() when JS calls
-    // finishChanges() on this engine's runtime.
+
+    // Register per-change-type callbacks so the C++ JS host-function lambdas
+    // write directly into the Kotlin RdmaChangeSink accumulator (matching the
+    // gogabr/jni-bridges design).
+    HermesContext_setRdmaCreateCallback(context, staticCFunction(::onRdmaCreate))
+    HermesContext_setRdmaPropertyChangeCallback(context, staticCFunction(::onRdmaPropertyChange))
+    HermesContext_setRdmaModifierChangeCallback(context, staticCFunction(::onRdmaModifierChange))
+    HermesContext_setRdmaAddCallback(context, staticCFunction(::onRdmaAdd))
+    HermesContext_setRdmaRemoveCallback(context, staticCFunction(::onRdmaRemove))
+    HermesContext_setRdmaMoveCallback(context, staticCFunction(::onRdmaMove))
+    HermesContext_setRdmaBridgeChangeCallback(context, staticCFunction(::onRdmaBridgeChange))
+    HermesContext_setRdmaSetRemoveDetachCallback(context, staticCFunction(::onRdmaSetRemoveDetach))
+    HermesContext_setRdmaSendChangesCallback(context, staticCFunction(::onRdmaSendChanges))
+
     rdmaChangeSinks.putValue(context.rawValue.toLong(), rdmaChangeSink!!)
-    // Wire the Kotlin rdmaChangeSink into the C++ layer so finishChanges()
-    // can call rdmaChangeSink.sendChanges() when JS invokes finishChanges.
-    // The C++ side manages pendingChanges and removeCounter internally; only
-    // the final sendChanges() call delegates to Kotlin.
     HermesContext_setRdmaChangeSink(context, staticCFunction(::rdmaChangeSinkSendChanges))
     val result = HermesContext_initRdmaChangesChannel(contextPointer)
     if (result == 0) {
@@ -405,6 +596,13 @@ actual class JsEngine private constructor(
 
   internal fun checkNotClosed() {
     check(!closed) { "JsEngine instance was closed" }
+  }
+
+  internal actual fun bridgeInitAll() {
+    checkNotClosed()
+
+    // Force initialization of all bridge modules
+    bridgeRetainRefs.forEach { it() }
   }
 
   internal actual fun cdpAttach(listener: CdpListener): Boolean {
@@ -467,3 +665,4 @@ actual class JsEngine private constructor(
     }
   }
 }
+

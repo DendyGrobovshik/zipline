@@ -66,6 +66,17 @@ expect class JsEngine : AutoCloseable {
   fun evaluate(script: String, fileName: String = "?"): Any?
 
   /**
+   * Evaluate [script] like [evaluate], but dispatch any object result through the
+   * registered @WithJS2HostBridge converters (the `bridge_dispatch` property). On JVM
+   * this is identical to [evaluate] (the JNI dispatcher already routes bridge objects);
+   * on Kotlin/Native [evaluate] returns null for plain objects, so this runs the result
+   * through `bridgeForAny` instead.
+   *
+   * @throws JsException if there is an error evaluating the script.
+   */
+  fun evaluateForBridge(script: String, fileName: String): Any?
+
+  /**
    * Compile [sourceCode] and return the bytecode. [fileName] will be used in error
    * reporting. [sourceMap] is optional to enable Kotlin stacktraces.
    *
@@ -134,4 +145,6 @@ expect class JsEngine : AutoCloseable {
   internal fun cdpResetAgent()
 
   override fun close()
+
+  internal fun bridgeInitAll()
 }

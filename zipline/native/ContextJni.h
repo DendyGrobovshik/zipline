@@ -76,6 +76,7 @@ class ContextJni : public ContextBase {
   jclass booleanClass;
   jclass integerClass;
   jclass doubleClass;
+  jclass longClass;
   jclass objectClass;
   jclass stringClass;
   jclass memoryUsageClass;
@@ -84,20 +85,14 @@ class ContextJni : public ContextBase {
   jmethodID booleanValueOf;
   jmethodID integerValueOf;
   jmethodID doubleValueOf;
+  jmethodID longValueOf;
   jmethodID stringGetBytes;
   jmethodID stringConstructor;
   jmethodID jsExceptionConstructor;
 
-  // RDMA Changes support
-  // The class holding cached JNI references for RDMA bridging.
-  jclass rdmaBridgeClass;
-  jmethodID rdmaBridgeCreateCreate;
-  jmethodID rdmaBridgeCreateAdd;
-  jmethodID rdmaBridgeCreateRemove;
-  jmethodID rdmaBridgeCreateMove;
-  jmethodID rdmaBridgeCreatePropertyChange;
-  jmethodID rdmaBridgeCreateModifierChange;
-  jmethodID rdmaBridgeCreateModifierElement;
+  // RDMA Changes support.
+  // Stateless JsonElement factories on the RdmaBridge companion (still @JvmStatic).
+  jclass rdmaBridgeClass = nullptr;
   jmethodID rdmaBridgeJsonPrimitiveString;
   jmethodID rdmaBridgeJsonPrimitiveInt;
   jmethodID rdmaBridgeJsonPrimitiveLong;
@@ -110,19 +105,38 @@ class ContextJni : public ContextBase {
   jmethodID arrayListInit;
   jmethodID arrayListInitWithCapacity;
   jmethodID arrayListAdd;
-  jobject rdmaBridgeInstance;
-  jmethodID rdmaBridgeSendChanges;
-  jmethodID rdmaBridgeSendBatch;
+
+  // Per-session RdmaChangeSink (global ref owned by this context). All change
+  // delivery goes through this instance, so concurrent sessions never route
+  // changes into each other's UI.
+  jobject rdmaChangeSink = nullptr;
+  jmethodID rdmaSinkCreateCreate;
+  jmethodID rdmaSinkCreatePropertyChange;
+  jmethodID rdmaSinkCreateModifierChange;
+  jmethodID rdmaSinkCreateAdd;
+  jmethodID rdmaSinkCreateRemove;
+  jmethodID rdmaSinkCreateMove;
+  jmethodID rdmaSinkCreateBridgeChange;
+  jmethodID rdmaSinkSetRemoveDetach;
+  jmethodID rdmaSinkSendBatch;
+  jmethodID rdmaSinkSendChanges;
+
+  // kotlin.Pair for modifier elements.
+  jclass pairClass = nullptr;
+  jmethodID pairInit = nullptr;
 
   std::vector<RdmaChange> pendingChanges;
 
   void cacheRdmaBridgeMethods(JNIEnv* env);
+  void cacheRdmaSink(jobject sink);
+  void dispatchChangeToSink(JNIEnv* env, const RdmaChange& ch);
+  void deleteBridgeRefs(JNIEnv* env);
   jobject jsValueToJsonElement(JNIEnv* env, const jsi::Value& val);
   jobject jsArrayToJsonElement(JNIEnv* env, const jsi::Value& val);
   jobject jsObjectToJsonElement(JNIEnv* env, const jsi::Value& val);
   void flushPendingBatch(JNIEnv* env, int toFlush);
   void finishFlushPending(JNIEnv* env);
-  void initRdmaChangesChannel(JNIEnv* env);
+  void initRdmaChangesChannel(JNIEnv* env, jobject rdmaChangeSink);
 
   std::unordered_map<std::string, jclass> globalReferences;
 };

@@ -95,13 +95,17 @@ actual class Zipline private constructor(
     jsEngine.initOutboundChannel(endpoint.inboundChannel)
     jsEngine.initRdmaChangesChannel()
 
-
     val eventLoop = CoroutineEventLoop(dispatcher, scope, guest)
 
     endpoint.bind<HostService>(
       name = ZIPLINE_HOST_NAME,
       instance = RealHostService(endpoint, this, eventListener, eventLoop),
     )
+  }
+
+  fun initRdmaChannel(sink: RdmaChangeSink) {
+    jsEngine.rdmaChangeSink = sink
+    jsEngine.initRdmaChangesChannel()
   }
 
   actual fun <T : ZiplineService> bind(name: String, instance: T) {
@@ -152,7 +156,7 @@ actual class Zipline private constructor(
    * calling close:
    *
    *  * Call [take] or [bind].
-   *  * Accessing [quickJs].
+   *  * Accessing [jsEngine].
    *  * Accessing the objects returned from [take].
    *
    * @param closeServices whether to close the host services that were bound with [bind]. Pass false

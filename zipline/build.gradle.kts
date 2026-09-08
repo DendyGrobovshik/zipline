@@ -423,6 +423,8 @@ val hermesJobs = Runtime.getRuntime().availableProcessors().toString()
 // separately via jsEngineRoot where needed) are excluded.
 val hermesGlueInputFiles: FileTree = fileTree(File(rootProject.projectDir, "zipline/native")) {
   include("*.cpp", "*.h")
+  include("hermes-ios/*.cpp", "hermes-ios/*.h")
+  include("common/*.cpp", "common/*.h")
   exclude("hermes/**", "hermes-jni-build/**", "mimalloc/**", "include/**")
 }
 val hermesCmakeInputFiles: FileTree =
@@ -634,6 +636,11 @@ val verifyHermesHostLibsStaged: TaskProvider<Task> =
 // The output libhermesvm.a is embedded in the iOS Kotlin/Native klib.
 //
 // Lean mode (no JS compiler, ~1 MB smaller) is for PRODUCTION publishes and
+// is OFF by default so compile()/evaluate() work in dev and in the test
+// suite (dev-mode loadJsModule compiles JS on-device). Publish with:
+//   ./gradlew publish... -PhermesIosLean=true
+val hermesIosLean: Boolean =
+  providers.gradleProperty("hermesIosLean").orNull?.toBooleanStrictOrNull() ?: false
 
 fun registerBuildHermesStaticIos(
   konanTarget: KonanTarget,
@@ -922,4 +929,22 @@ configure<MavenPublishBaseExtension> {
   configure(
     KotlinMultiplatform(javadocJar = JavadocJar.Empty())
   )
+}
+
+// Bundle native headers into the AAR assets for consumer CMake builds.
+val copyBridgeHeaders by tasks.registering(Copy::class) {
+  from("native") {
+    include("bridge_dispatch.h")
+    include("quickjs/quickjs.h")
+  }
+  into(layout.buildDirectory.dir("generated/assets/bridge-headers"))
+}
+
+android {
+  sourceSets {
+    getByName("main").assets.srcDir(copyBridgeHeaders)
+  }
+}
+tasks.matching { it.name.startsWith("merge") && it.name.contains("Assets") }.configureEach {
+  dependsOn(copyBridgeHeaders)
 }
