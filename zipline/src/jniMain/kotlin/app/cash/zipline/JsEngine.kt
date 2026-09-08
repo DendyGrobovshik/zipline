@@ -69,6 +69,32 @@ actual class JsEngine private constructor(
   actual val memoryUsage: MemoryUsage
     get() = memoryUsage(context) ?: throw AssertionError()
 
+  /**
+   * Starts Hermes' sampling heap profiler. Must be called on the Zipline
+   * dispatcher thread (the same thread that runs JS in this engine).
+   * [samplingInterval] is in bytes; smaller values are more precise but slower.
+   * Allocations smaller than the interval are not sampled.
+   */
+  fun startHeapSampling(samplingInterval: Long = 32L * 1024L) {
+    nativeStartHeapSampling(context, samplingInterval)
+  }
+
+  /**
+   * Stops sampling and writes a Chrome DevTools sampling heap profile (JSON)
+   * to [path]. Must be called on the Zipline dispatcher thread. Returns
+   * false on IO failure.
+   */
+  fun stopHeapSampling(path: String): Boolean =
+    nativeStopHeapSampling(context, path)
+
+  /**
+   * Writes a full Chrome DevTools heap snapshot (JSON) to [path]. Performs a
+   * GC first. Must be called on the Zipline dispatcher thread. Returns false
+   * on IO failure.
+   */
+  fun dumpHeapSnapshot(path: String): Boolean =
+    nativeDumpHeapSnapshot(context, path)
+
   /** Hermes heap limit is fixed at runtime construction; resizing is unsupported. */
   actual var memoryLimit: Long
     get() = throw UnsupportedOperationException()
@@ -234,6 +260,9 @@ actual class JsEngine private constructor(
   private external fun compile(context: Long, sourceCode: String, fileName: String, sourceMap: String?): ByteArray
   private external fun memoryUsage(context: Long): MemoryUsage?
   private external fun gc(context: Long)
+  private external fun nativeStartHeapSampling(context: Long, samplingInterval: Long)
+  private external fun nativeStopHeapSampling(context: Long, path: String): Boolean
+  private external fun nativeDumpHeapSnapshot(context: Long, path: String): Boolean
   private external fun getGlobalProperty(context: Long, name: String): String?
   private external fun setGlobalProperty(context: Long, name: String, value: String)
   private external fun deleteGlobalProperty(context: Long, name: String)
