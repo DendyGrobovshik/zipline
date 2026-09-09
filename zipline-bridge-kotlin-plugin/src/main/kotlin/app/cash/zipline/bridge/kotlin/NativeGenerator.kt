@@ -130,15 +130,21 @@ internal fun generateNativeBridgeFile(outputDir: String, clazz: IrClass) {
     appendLine("import app.cash.zipline.registerBridge")
     val needsBridgeForAny = mutableSetOf<Unit>()
     val needsJsLong = mutableSetOf<Unit>()
+    val needsJsBoxed = mutableSetOf<Unit>()
     for (field in fields) {
       collectRuntimeImports(field.type, needsBridgeForAny, needsJsLong)
       if (field.isInline && field.underlyingKtType == "kotlin.Long") needsJsLong.add(Unit)
+      if (field.isInline) needsJsBoxed.add(Unit)
     }
     if (needsBridgeForAny.isNotEmpty()) {
       appendLine("import app.cash.zipline.bridgeForAny")
     }
     if (needsJsLong.isNotEmpty()) {
       appendLine("import app.cash.zipline.JsNumberToLong")
+    }
+    if (needsJsBoxed.isNotEmpty()) {
+      appendLine("import app.cash.zipline.JsBoxedNumberToLong")
+      appendLine("import app.cash.zipline.JsBoxedNumberToDouble")
     }
     // Import the target class and any inline wrapper types + object types
     val parentFqn = (clazz.parent as? IrClass)?.fqNameWhenAvailable?.asString()
@@ -184,9 +190,9 @@ internal fun generateNativeBridgeFile(outputDir: String, clazz: IrClass) {
           appendLine("    ${readProperty()}")
           if (field.isNullable) {
             appendLine("    val ${field.name} = if (HermesBridge_getValueTag(ctx, ${field.name}Ref) == TAG_UNDEFINED || HermesBridge_getValueTag(ctx, ${field.name}Ref) == TAG_NULL) null")
-            appendLine("        else ${inlineWrapExpression(field, "HermesBridge_getValueDouble(ctx, ${field.name}Ref).toInt()")}")
+            appendLine("        else ${inlineWrapExpression(field, "JsBoxedNumberToDouble(ctx, ${field.name}Ref)?.toInt() ?: HermesBridge_getValueDouble(ctx, ${field.name}Ref).toInt()")}")
           } else {
-            appendLine("    val ${field.name} = ${inlineWrapExpression(field, "HermesBridge_getValueDouble(ctx, ${field.name}Ref).toInt()")}")
+            appendLine("    val ${field.name} = ${inlineWrapExpression(field, "JsBoxedNumberToDouble(ctx, ${field.name}Ref)?.toInt() ?: HermesBridge_getValueDouble(ctx, ${field.name}Ref).toInt()")}")
           }
           appendLine("    ${freeRef()}")
         }
@@ -194,9 +200,9 @@ internal fun generateNativeBridgeFile(outputDir: String, clazz: IrClass) {
           appendLine("    ${readProperty()}")
           if (field.isNullable) {
             appendLine("    val ${field.name} = if (HermesBridge_getValueTag(ctx, ${field.name}Ref) == TAG_UNDEFINED || HermesBridge_getValueTag(ctx, ${field.name}Ref) == TAG_NULL) null")
-            appendLine("        else ${inlineWrapExpression(field, "HermesBridge_getValueDouble(ctx, ${field.name}Ref).toFloat()")}")
+            appendLine("        else ${inlineWrapExpression(field, "JsBoxedNumberToDouble(ctx, ${field.name}Ref)?.toFloat() ?: HermesBridge_getValueDouble(ctx, ${field.name}Ref).toFloat()")}")
           } else {
-            appendLine("    val ${field.name} = ${inlineWrapExpression(field, "HermesBridge_getValueDouble(ctx, ${field.name}Ref).toFloat()")}")
+            appendLine("    val ${field.name} = ${inlineWrapExpression(field, "JsBoxedNumberToDouble(ctx, ${field.name}Ref)?.toFloat() ?: HermesBridge_getValueDouble(ctx, ${field.name}Ref).toFloat()")}")
           }
           appendLine("    ${freeRef()}")
         }
@@ -204,9 +210,9 @@ internal fun generateNativeBridgeFile(outputDir: String, clazz: IrClass) {
           appendLine("    ${readProperty()}")
           if (field.isNullable) {
             appendLine("    val ${field.name} = if (HermesBridge_getValueTag(ctx, ${field.name}Ref) == TAG_UNDEFINED || HermesBridge_getValueTag(ctx, ${field.name}Ref) == TAG_NULL) null")
-            appendLine("        else ${inlineWrapExpression(field, "HermesBridge_getValueDouble(ctx, ${field.name}Ref)")}")
+            appendLine("        else ${inlineWrapExpression(field, "JsBoxedNumberToDouble(ctx, ${field.name}Ref) ?: HermesBridge_getValueDouble(ctx, ${field.name}Ref)")}")
           } else {
-            appendLine("    val ${field.name} = ${inlineWrapExpression(field, "HermesBridge_getValueDouble(ctx, ${field.name}Ref)")}")
+            appendLine("    val ${field.name} = ${inlineWrapExpression(field, "JsBoxedNumberToDouble(ctx, ${field.name}Ref) ?: HermesBridge_getValueDouble(ctx, ${field.name}Ref)")}")
           }
           appendLine("    ${freeRef()}")
         }
@@ -214,9 +220,9 @@ internal fun generateNativeBridgeFile(outputDir: String, clazz: IrClass) {
           appendLine("    ${readProperty()}")
           if (field.isNullable) {
             appendLine("    val ${field.name} = if (HermesBridge_getValueTag(ctx, ${field.name}Ref) == TAG_UNDEFINED || HermesBridge_getValueTag(ctx, ${field.name}Ref) == TAG_NULL) null")
-            appendLine("        else ${inlineWrapExpression(field, "JsNumberToLong(ctx, ${field.name}Ref)")}")
+            appendLine("        else ${inlineWrapExpression(field, "JsBoxedNumberToLong(ctx, ${field.name}Ref) ?: JsNumberToLong(ctx, ${field.name}Ref)")}")
           } else {
-            appendLine("    val ${field.name} = ${inlineWrapExpression(field, "JsNumberToLong(ctx, ${field.name}Ref)")}")
+            appendLine("    val ${field.name} = ${inlineWrapExpression(field, "JsBoxedNumberToLong(ctx, ${field.name}Ref) ?: JsNumberToLong(ctx, ${field.name}Ref)")}")
           }
           appendLine("    ${freeRef()}")
         }
