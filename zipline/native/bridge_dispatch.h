@@ -164,13 +164,34 @@ static inline jobject jsi_value_to_boxed(JNIEnv *env, jsi::Runtime &rt, const js
     return env->NewStringUTF(v.asString(rt).utf8(rt).c_str());
   }
   if (v.isObject()) {
+    jsi::Object obj = v.asObject(rt);
+    // JS array → java.util.ArrayList, converting each element recursively.
+    if (obj.isArray(rt)) {
+      jclass alc = env->FindClass("java/util/ArrayList");
+      jmethodID alc_init = env->GetMethodID(alc, "<init>", "()V");
+      jmethodID alc_add = env->GetMethodID(alc, "add", "(Ljava/lang/Object;)Z");
+      jobject list = env->NewObject(alc, alc_init);
+      if (env->ExceptionCheck()) return nullptr;
+      jsi::Array arr = obj.asArray(rt);
+      size_t n = arr.length(rt);
+      for (size_t i = 0; i < n && !env->ExceptionCheck(); i++) {
+        jsi::Value elem = arr.getValueAtIndex(rt, i);
+        jobject je = jsi_value_to_boxed(env, rt, elem);
+        env->CallBooleanMethod(list, alc_add, je);
+        if (je) env->DeleteLocalRef(je);
+      }
+      if (env->ExceptionCheck()) {
+        env->DeleteLocalRef(list);
+        return nullptr;
+      }
+      return list;
+    }
     intptr_t ptr = jsi_get_bridge_dispatch(rt, v);
     if (ptr != 0) {
       JniBridgeDispatch *disp = (JniBridgeDispatch*)ptr;
       return disp->toJavaObject(env, rt, v);
     }
     // Kotlin/JS Long: {low_1, high_1}.
-    jsi::Object obj = v.asObject(rt);
     jsi::Value lo = obj.getProperty(rt, "low_1");
     if (!lo.isUndefined()) {
       jsi::Value hi = obj.getProperty(rt, "high_1");
