@@ -937,6 +937,10 @@ val copyBridgeHeaders by tasks.registering(Copy::class) {
     include("bridge_dispatch.h")
     include("quickjs/quickjs.h")
   }
+  from("native/hermes/API/jsi") {
+    include("jsi/*.h")
+    into("hermes/API/jsi")
+  }
   into(layout.buildDirectory.dir("generated/assets/bridge-headers"))
 }
 

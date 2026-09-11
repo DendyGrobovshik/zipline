@@ -100,7 +100,7 @@ private fun collectRuntimeImports(
 
 internal fun generateNativeBridgeFile(outputDir: String, clazz: IrClass) {
   val fqn = clazz.fqNameWhenAvailable?.asString() ?: return
-  val functionName = "${clazz.name.asString()}_toKotlin"
+  val functionName = "${fqn.replace(".", "_")}_toKotlin"
   val fields = extractFields(clazz)
 
   // The generated code constructs the bridged class (and, for nested classes, its enclosing
